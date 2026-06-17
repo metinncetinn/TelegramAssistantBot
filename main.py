@@ -1,0 +1,670 @@
+"""
+Pi Dashboard — FastAPI Backend (Professional Edition v2.0)
+Çalıştırma: uvicorn main:app --host 0.0.0.0 --port 8000
+"""
+
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, field_validator
+import json, os, datetime, uuid, requests, pytz, time, threading, hashlib, shutil, subprocess, mimetypes
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = FastAPI(title="Pi Dashboard API", version="2.0.0")
+
+BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE      = os.path.join(BASE_DIR, 'wallet.json')
+REMINDERS_FILE = os.path.join(BASE_DIR, 'reminders.json')
+
+OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY', '')
+LOCATION            = os.getenv('LOCATION', 'Konya')
+WOL_MAC_ADDRESS     = os.getenv('WOL_MAC_ADDRESS', '')
+HUGGINGFACE_TOKEN   = os.getenv('HUGGINGFACE_TOKEN', '')
+
+# Galeri — fotoğraf/video deposu (genelde Tailscale/Syncthing ile dolan SSD klasörü)
+GALLERY_DIR = os.getenv('GALLERY_DIR', '...')
+THUMB_DIR   = os.path.join(BASE_DIR, 'gallery_thumbs')
+
+IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.gif', '.bmp'}
+VIDEO_EXTS = {'.mp4', '.mov', '.avi', '.mkv', '.3gp', '.webm', '.m4v'}
+MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
+
+# iPhone'lardan gelen HEIC fotoğraflar için Pillow'a HEIC okuyucu ekle (varsa)
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
+
+ALTINKAYNAK_GOLD_URL     = 'https://static.altinkaynak.com/public/Gold'
+ALTINKAYNAK_CURRENCY_URL = 'https://static.altinkaynak.com/public/Currency'
+
+CURRENCY_NAMES = {
+    'usd': 'Dolar', 'eur': 'Euro', 'gbp': 'Sterlin', 'jpy': 'Japon Yeni',
+    'gram': 'Gram Altın', 'ceyrek': 'Çeyrek Altın',
+    'yarim': 'Yarım Altın', 'tam': 'Tam Altın'
+}
+CURRENCY_SYMBOLS = {
+    'usd': '$', 'eur': '€', 'gbp': '£', 'jpy': '¥',
+    'gram': 'gr', 'ceyrek': '¼', 'yarim': '½', 'tam': '1'
+}
+
+TZ = pytz.timezone('Europe/Istanbul')
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# YARDIMCI
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def parse_tr(v: str) -> float:
+    try: return float(v.replace('.', '').replace(',', '.'))
+    except: return 0.0
+
+def load_json(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except: pass
+    return default
+
+def save_json(path, data):
+    """Atomic JSON yazma (race condition önleme)"""
+    try:
+        temp_path = path + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        if os.path.exists(path):
+            os.remove(path)
+        os.rename(temp_path, path)
+    except Exception as e:
+        print(f"JSON yazma hatası ({path}): {e}")
+        raise HTTPException(500, f"Veri kaydetme hatası: {str(e)}")
+
+def load_wallet():
+    data = load_json(DATA_FILE, {})
+    for k in CURRENCY_NAMES:
+        if k not in data:
+            data[k] = {'amount': 0.0, 'cost': 0.0}
+        elif isinstance(data[k], (int, float)):
+            data[k] = {'amount': float(data[k]), 'cost': 0.0}
+    return data
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CACHE SYSTEM
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class Cache:
+    def __init__(self, ttl_seconds=300):
+        self.data = {}
+        self.ttl = ttl_seconds
+        self.lock = threading.Lock()
+    
+    def get(self, key):
+        with self.lock:
+            if key in self.data:
+                value, timestamp = self.data[key]
+                if time.time() - timestamp < self.ttl:
+                    return value
+                del self.data[key]
+        return None
+    
+    def set(self, key, value):
+        with self.lock:
+            self.data[key] = (value, time.time())
+
+    def invalidate(self, key):
+        with self.lock:
+            self.data.pop(key, None)
+
+rate_cache = Cache(ttl_seconds=300)  # 5 dakika
+weather_cache = Cache(ttl_seconds=600)  # 10 dakika
+gallery_cache = Cache(ttl_seconds=30)  # 30 saniye — Syncthing arka planda dosya eklerken yeni dosyalar kısa sürede görünür
+        
+def get_rates(use_cache=True):
+    """Kur bilgilerini al (cache ile)"""
+    if use_cache:
+        cached = rate_cache.get('rates')
+        if cached:
+            return cached
+    
+    rates = {}
+    try:
+        r = requests.get(ALTINKAYNAK_CURRENCY_URL, timeout=10)
+        if r.ok:
+            for item in r.json():
+                k, v = item.get('Kod', '').upper(), item.get('Alis', '0')
+                if k == 'USD':   rates['usd'] = parse_tr(v)
+                elif k == 'EUR': rates['eur'] = parse_tr(v)
+                elif k == 'GBP': rates['gbp'] = parse_tr(v)
+                elif k == 'JPY': rates['jpy'] = parse_tr(v)
+    except: pass
+    try:
+        r = requests.get(ALTINKAYNAK_GOLD_URL, timeout=10)
+        if r.ok:
+            for item in r.json():
+                k, v = item.get('Kod', '').upper(), item.get('Alis', '0')
+                if k == 'PGA':    rates['gram']   = parse_tr(v)
+                elif k == 'PC':   rates['ceyrek'] = parse_tr(v)
+                elif k == 'PY':   rates['yarim']  = parse_tr(v)
+                elif k == 'PT':   rates['tam']    = parse_tr(v)
+    except: pass
+    
+    if len(rates) >= 6:
+        rate_cache.set('rates', rates)
+        return rates
+    return None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — PORTFÖy (Döviz / Altın)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.get('/api/portfolio')
+def portfolio():
+    wallet = load_wallet()
+    rates  = get_rates()
+    if not rates: raise HTTPException(502, 'Kur verisi alınamadı')
+    items = []; total_value = total_cost = 0.0
+    for key, name in CURRENCY_NAMES.items():
+        e = wallet.get(key, {'amount': 0.0, 'cost': 0.0})
+        amt, cost = e['amount'], e['cost']
+        if amt <= 0: continue
+        rate  = rates.get(key, 0)
+        value = amt * rate
+        pnl   = value - cost
+        total_value += value; total_cost += cost
+        items.append({
+            'key': key, 'name': name, 'symbol': CURRENCY_SYMBOLS[key],
+            'amount': amt, 'rate': rate,
+            'avg_rate': (cost / amt) if amt else 0,
+            'value': value, 'cost': cost,
+            'pnl': pnl, 'pnl_pct': (pnl / cost * 100) if cost else 0,
+        })
+    total_pnl = total_value - total_cost
+    return {
+        'items': items,
+        'total_value': total_value, 'total_cost': total_cost,
+        'total_pnl': total_pnl,
+        'total_pnl_pct': (total_pnl / total_cost * 100) if total_cost else 0,
+        'rates': rates,
+        'updated_at': datetime.datetime.now(TZ).strftime('%H:%M:%S'),
+    }
+
+class TxRequest(BaseModel):
+    key: str
+    amount: float
+    
+    @field_validator('key')
+    @classmethod
+    def validate_key(cls, v):
+        if v not in CURRENCY_NAMES:
+            raise ValueError(f'Geçersiz birim: {v}')
+        return v
+    
+    @field_validator('amount')
+    @classmethod
+    def validate_amount(cls, v):
+        if v <= 0:
+            raise ValueError('Miktar 0\'dan büyük olmalı')
+        if v > 999_999_999:
+            raise ValueError('Çok büyük değer')
+        return v
+
+@app.post('/api/portfolio/add')
+def portfolio_add(req: TxRequest):
+    """Portföye kripto/döviz ekle"""
+    try:
+        rates = get_rates(use_cache=False)
+        if not rates:
+            raise HTTPException(502, 'Kur alınamadı')
+        
+        rate = rates[req.key]
+        cost = req.amount * rate
+        
+        w = load_wallet()
+        w[req.key]['amount'] = float(w[req.key]['amount']) + req.amount
+        w[req.key]['cost'] = float(w[req.key]['cost']) + cost
+        save_json(DATA_FILE, w)
+        
+        return {
+            'ok': True,
+            'rate': round(rate, 2),
+            'cost': round(cost, 2),
+            'message': f"{CURRENCY_NAMES[req.key]} eklendi"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f'Ekleme hatası: {str(e)}')
+
+@app.post('/api/portfolio/remove')
+def portfolio_remove(req: TxRequest):
+    """Portföyden kripto/döviz çıkar"""
+    try:
+        w = load_wallet()
+        cur = float(w[req.key]['amount'])
+        
+        if cur < req.amount:
+            raise HTTPException(400, f'Yetersiz bakiye: {cur:.2f}')
+        
+        if cur == 0:
+            raise HTTPException(400, 'Bakiye sıfır')
+        
+        ratio = req.amount / cur
+        w[req.key]['amount'] -= req.amount
+        w[req.key]['cost'] -= float(w[req.key]['cost']) * ratio
+        save_json(DATA_FILE, w)
+        
+        return {
+            'ok': True,
+            'message': f"{CURRENCY_NAMES[req.key]} çıkarıldı"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f'Çıkarma hatası: {str(e)}')
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — HATIRLATICILAR
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.get('/api/reminders')
+def get_reminders():
+    reminders = load_json(REMINDERS_FILE, [])
+    now = datetime.datetime.now(TZ)
+    out = []
+    for r in reminders:
+        item = dict(r); item['id_short'] = r['id'][:6]
+        if r['type'] == 'once':
+            fire = datetime.datetime.fromisoformat(r['fire_at'])
+            if fire.tzinfo is None: fire = TZ.localize(fire)
+            item['fire_str'] = fire.strftime('%d.%m.%Y %H:%M')
+            item['is_past']  = fire < now
+        out.append(item)
+    return out
+
+class ReminderReq(BaseModel):
+    type: str; text: str
+    fire_at: str = ''
+    repeat_type: str = ''
+    weekday: int = -1
+    hour: int = 0; minute: int = 0
+
+@app.post('/api/reminders')
+def create_reminder(req: ReminderReq):
+    now = datetime.datetime.now(TZ)
+    r = {'id': str(uuid.uuid4()), 'text': req.text}
+    if req.type == 'once':
+        fire = None; t = req.fire_at.lower().strip()
+        for sfx in ['saat', 's']:
+            if t.endswith(sfx):
+                try: fire = now + datetime.timedelta(hours=float(t.replace(sfx, ''))); break
+                except: pass
+        if not fire:
+            for sfx in ['dakika', 'dk', 'min', 'm']:
+                if t.endswith(sfx):
+                    try: fire = now + datetime.timedelta(minutes=float(t.replace(sfx, ''))); break
+                    except: pass
+        if not fire:
+            try:
+                h, m = map(int, t.split(':'))
+                fire = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                if fire <= now: fire += datetime.timedelta(days=1)
+            except: pass
+        if not fire: raise HTTPException(400, 'Geçersiz zaman formatı')
+        r['type'] = 'once'; r['fire_at'] = fire.isoformat()
+    elif req.type == 'repeat':
+        days = ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi', 'Pazar']
+        day_str = days[req.weekday] if 0 <= req.weekday <= 6 else ''
+        label = f"Her {'gün' if req.repeat_type == 'gün' else 'hafta ' + day_str} {req.hour:02d}:{req.minute:02d}"
+        r.update({'type': 'repeat', 'repeat_type': req.repeat_type,
+                  'weekday': req.weekday if req.weekday >= 0 else None,
+                  'hour': req.hour, 'minute': req.minute, 'repeat_label': label})
+    else:
+        raise HTTPException(400, 'Geçersiz tip')
+    reminders = load_json(REMINDERS_FILE, [])
+    reminders.append(r)
+    save_json(REMINDERS_FILE, reminders)
+    return {'ok': True, 'id': r['id'][:6]}
+
+@app.delete('/api/reminders/{rid}')
+def delete_reminder(rid: str):
+    reminders = load_json(REMINDERS_FILE, [])
+    new = [r for r in reminders if not r['id'].startswith(rid)]
+    if len(new) == len(reminders): raise HTTPException(404, 'Bulunamadı')
+    save_json(REMINDERS_FILE, new)
+    return {'ok': True}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — HAVA DURUMU
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.get('/api/weather')
+def weather():
+    """Hava durumu"""
+    try:
+        cached = weather_cache.get('weather')
+        if cached:
+            return cached
+        
+        if not OPENWEATHER_API_KEY:
+            raise HTTPException(400, 'Hava durumu API anahtarı yapılandırılmadı')
+        
+        url = f'https://api.openweathermap.org/data/2.5/weather?q={LOCATION}&appid={OPENWEATHER_API_KEY}&units=metric&lang=tr'
+        r = requests.get(url, timeout=10)
+        
+        if not r.ok:
+            raise HTTPException(r.status_code, 'Hava durumu API hatası')
+        
+        d = r.json()
+        result = {
+            'city': d['name'],
+            'temp': round(d['main']['temp']),
+            'feels_like': round(d['main']['feels_like']),
+            'humidity': d['main']['humidity'],
+            'desc': d['weather'][0]['description'].capitalize(),
+            'icon': d['weather'][0]['icon'],
+            'wind': round(d['wind']['speed'] * 3.6, 1),
+        }
+        weather_cache.set('weather', result)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f'Hava durumu hatası: {str(e)}')
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — WAKE ON LAN
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.post('/api/wol')
+def wake_on_lan():
+    if not WOL_MAC_ADDRESS:
+        raise HTTPException(500, 'WOL_MAC_ADDRESS tanımlı değil')
+    try:
+        import socket
+        mac = WOL_MAC_ADDRESS.replace(':', '').replace('-', '').replace('.', '')
+        if len(mac) != 12: raise ValueError('Geçersiz MAC')
+        magic = b'\xff' * 6 + bytes.fromhex(mac) * 16
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.sendto(magic, ('255.255.255.255', 9))
+        sock.close()
+        return {'ok': True, 'mac': WOL_MAC_ADDRESS}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — GÖRSEL ÜRETME
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class ImageReq(BaseModel):
+    prompt: str
+
+@app.post('/api/generate-image')
+def generate_image(req: ImageReq):
+    if not HUGGINGFACE_TOKEN or HUGGINGFACE_TOKEN == '?':
+        raise HTTPException(500, 'HUGGINGFACE_TOKEN tanımlı değil')
+    try:
+        r = requests.post(
+            'https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell',
+            headers={'Authorization': f'Bearer {HUGGINGFACE_TOKEN}'},
+            json={'inputs': req.prompt},
+            timeout=120
+        )
+        if r.status_code == 401: raise HTTPException(401, 'Geçersiz Hugging Face token')
+        if r.status_code == 503:
+            try:
+                wait = r.json().get('estimated_time', 30)
+                raise HTTPException(503, f'Model yükleniyor, {int(wait)}sn bekleyin')
+            except HTTPException: raise
+            except: raise HTTPException(503, 'Model yükleniyor, 30sn sonra tekrar deneyin')
+        r.raise_for_status()
+        import base64
+        return {'ok': True, 'image': base64.b64encode(r.content).decode()}
+    except HTTPException: raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — SİSTEM BİLGİSİ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.get('/api/system')
+def system_info():
+    try:
+        import psutil
+        cpu  = psutil.cpu_percent(interval=0.5)
+        ram  = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        try:
+            with open('/sys/class/thermal/thermal_zone0/temp') as f:
+                temp = int(f.read()) / 1000.0
+        except: temp = None
+        return {
+            'cpu': cpu,
+            'ram_pct': ram.percent, 'ram_used': round(ram.used / 1024**3, 1), 'ram_total': round(ram.total / 1024**3, 1),
+            'disk_pct': disk.percent, 'disk_used': round(disk.used / 1024**3, 1), 'disk_total': round(disk.total / 1024**3, 1),
+            'temp': temp,
+        }
+    except ImportError: raise HTTPException(500, 'psutil kurulu değil')
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — GALERİ (Fotoğraf / Video)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def scan_gallery():
+    """GALLERY_DIR'i tarar, medya dosyalarını listeler (kısa süreli cache'li).
+    Syncthing/PhotoSync gibi araçlar arka planda dosya eklediğinde,
+    cache süresi dolduğunda yeni dosyalar otomatik görünür."""
+    cached = gallery_cache.get('index')
+    if cached:
+        return cached
+
+    items = []
+    if os.path.isdir(GALLERY_DIR):
+        for root, dirs, files in os.walk(GALLERY_DIR):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for fn in files:
+                if fn.startswith('.'):
+                    continue
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in MEDIA_EXTS:
+                    continue
+                full = os.path.join(root, fn)
+                rel  = os.path.relpath(full, GALLERY_DIR)
+                try:
+                    stat = os.stat(full)
+                except OSError:
+                    continue
+                gid = hashlib.md5(rel.encode('utf-8')).hexdigest()[:16]
+                items.append({
+                    'id': gid, 'rel': rel, 'name': fn,
+                    'type': 'video' if ext in VIDEO_EXTS else 'image',
+                    'size': stat.st_size, 'mtime': stat.st_mtime,
+                })
+
+    items.sort(key=lambda x: x['mtime'], reverse=True)
+    index = {it['id']: it for it in items}
+    result = {'items': items, 'index': index}
+    gallery_cache.set('index', result)
+    return result
+
+
+def get_gallery_item(gid: str):
+    """ID'den dosya bilgisini ve tam yolunu döndürür, yoksa 404.
+    gid değeri her zaman scan_gallery() index'inden geldiği için
+    path traversal riski yoktur."""
+    data = scan_gallery()
+    item = data['index'].get(gid)
+    if not item:
+        raise HTTPException(404, 'Dosya bulunamadı')
+    full = os.path.join(GALLERY_DIR, item['rel'])
+    if not os.path.isfile(full):
+        raise HTTPException(404, 'Dosya bulunamadı')
+    return item, full
+
+
+@app.get('/api/gallery')
+def gallery_list(page: int = 1, limit: int = 30, type: str = 'all',
+                 refresh: bool = False, sort: str = 'date_desc'):
+    """Sayfalanmış galeri listesi.
+    sort: date_desc, date_asc, name_asc, name_desc, size_desc, size_asc
+    refresh=true gönderilirse cache temizlenir ve klasör yeniden taranır."""
+    if refresh:
+        gallery_cache.invalidate('index')
+
+    if page < 1: page = 1
+    if limit < 1: limit = 1
+    if limit > 100: limit = 100
+
+    data  = scan_gallery()
+    items = list(data['items'])  # kopya al, orijinali bozma
+    if type in ('image', 'video'):
+        items = [it for it in items if it['type'] == type]
+
+    # Sıralama
+    sort_map = {
+        'date_desc': (lambda x: x['mtime'], True),
+        'date_asc':  (lambda x: x['mtime'], False),
+        'name_asc':  (lambda x: x['name'].lower(), False),
+        'name_desc': (lambda x: x['name'].lower(), True),
+        'size_desc': (lambda x: x['size'], True),
+        'size_asc':  (lambda x: x['size'], False),
+    }
+    key_fn, reverse = sort_map.get(sort, sort_map['date_desc'])
+    items.sort(key=key_fn, reverse=reverse)
+
+    total = len(items)
+    pages = max(1, (total + limit - 1) // limit)
+    start = (page - 1) * limit
+    page_items = items[start:start + limit]
+
+    out = []
+    for it in page_items:
+        dt = datetime.datetime.fromtimestamp(it['mtime'], TZ)
+        out.append({
+            'id': it['id'], 'type': it['type'], 'name': it['name'],
+            'size': it['size'], 'date': dt.strftime('%d.%m.%Y %H:%M'),
+        })
+    return {'items': out, 'total': total, 'page': page, 'pages': pages}
+
+
+@app.get('/api/gallery/thumb/{gid}')
+def gallery_thumb(gid: str):
+    """Küçük önizleme görseli (cache'li, ilk istekte üretilir).
+    Resimler için Pillow, videolar için ffmpeg kullanılır."""
+    item, full = get_gallery_item(gid)
+    os.makedirs(THUMB_DIR, exist_ok=True)
+    thumb_path = os.path.join(THUMB_DIR, gid + '.jpg')
+
+    if not os.path.exists(thumb_path) or os.path.getmtime(thumb_path) < os.path.getmtime(full):
+        try:
+            if item['type'] == 'image':
+                from PIL import Image
+                img = Image.open(full)
+                img = img.convert('RGB')
+                img.thumbnail((480, 480))
+                img.save(thumb_path, 'JPEG', quality=82)
+            else:
+                subprocess.run(
+                    ['ffmpeg', '-y', '-ss', '00:00:01', '-i', full,
+                     '-frames:v', '1', '-vf', 'scale=480:-2', thumb_path],
+                    check=True, capture_output=True, timeout=30,
+                )
+        except FileNotFoundError:
+            raise HTTPException(500, 'ffmpeg kurulu değil (video önizleme için gerekli)')
+        except Exception as e:
+            raise HTTPException(500, f'Önizleme oluşturulamadı: {e}')
+
+    if not os.path.exists(thumb_path):
+        raise HTTPException(500, 'Önizleme oluşturulamadı')
+    return FileResponse(thumb_path, media_type='image/jpeg')
+
+
+@app.get('/api/gallery/file/{gid}')
+def gallery_file(gid: str):
+    """Orijinal dosya — HEIC ise tarayıcı için JPEG'e çevirir"""
+    item, full = get_gallery_item(gid)
+    ext = os.path.splitext(full)[1].lower()
+
+    if ext in {'.heic', '.heif'}:
+        # Tarayıcı HEIC gösteremiyor, bellekte JPEG'e çevir
+        try:
+            from PIL import Image
+            import io
+            img = Image.open(full).convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, 'JPEG', quality=92)
+            buf.seek(0)
+            from fastapi.responses import StreamingResponse
+            return StreamingResponse(buf, media_type='image/jpeg')
+        except Exception as e:
+            raise HTTPException(500, f'HEIC dönüştürme hatası: {e}')
+
+    media_type = mimetypes.guess_type(full)[0] or 'application/octet-stream'
+    return FileResponse(full, media_type=media_type)
+
+
+@app.get('/api/gallery/download/{gid}')
+def gallery_download(gid: str):
+    """Dosyayı indirilecek şekilde gönder (Content-Disposition: attachment)"""
+    item, full = get_gallery_item(gid)
+    media_type = mimetypes.guess_type(full)[0] or 'application/octet-stream'
+    return FileResponse(full, media_type=media_type, filename=item['name'])
+
+
+@app.delete('/api/gallery/{gid}')
+def gallery_delete(gid: str):
+    """Dosyayı ve önizlemesini SSD'den siler"""
+    item, full = get_gallery_item(gid)
+    try:
+        os.remove(full)
+    except OSError as e:
+        raise HTTPException(500, f'Silme hatası: {e}')
+    thumb_path = os.path.join(THUMB_DIR, gid + '.jpg')
+    if os.path.exists(thumb_path):
+        try: os.remove(thumb_path)
+        except OSError: pass
+    gallery_cache.invalidate('index')
+    return {'ok': True}
+
+
+@app.get('/api/gallery/storage')
+def gallery_storage():
+    """SSD doluluk durumu ve toplam dosya sayısı"""
+    if not os.path.isdir(GALLERY_DIR):
+        raise HTTPException(404, f'Galeri klasörü bulunamadı: {GALLERY_DIR}')
+    total, used, free = shutil.disk_usage(GALLERY_DIR)
+    data = scan_gallery()
+    return {
+        'total_gb': round(total / 1024**3, 1),
+        'used_gb':  round(used  / 1024**3, 1),
+        'free_gb':  round(free  / 1024**3, 1),
+        'used_pct': round(used / total * 100, 1) if total else 0,
+        'file_count': len(data['items']),
+    }
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# STATIC / SPA
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STATIC_DIR = os.path.join(BASE_DIR, 'static')
+os.makedirs(STATIC_DIR, exist_ok=True)
+app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
+
+@app.get('/{full_path:path}')
+def serve_spa(full_path: str):
+    # SPA için index.html root'da olmalı
+    index = os.path.join(BASE_DIR, 'index.html')
+    return FileResponse(index) if os.path.exists(index) else {'error': 'index.html bulunamadı'}

@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#0a0a0a"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<title>Pi Dashboard</title>
+<link rel="icon" type="image/x-icon" href="https://raw.githubusercontent.com/metinncetinn/metinncetinn.github.io/refs/heads/main/gorsel/favicon.ico"/>
+<link rel="manifest" href="/static/manifest.json"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Syne:wght@400;600;700&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:       #0a0a0a;
+  --surface:  #111111;
+  --surface2: #181818;
+  --border:   #222222;
+  --border2:  #2a2a2a;
+  --text:     #e8e8e8;
+  --muted:    #555;
+  --dim:      #333;
+  --accent:   #c8ff00;   /* neon chartreuse — sharp, memorable */
+  --accent2:  #00d4ff;
+  --red:      #ff4444;
+  --green:    #00e676;
+  --mono:     'JetBrains Mono', monospace;
+  --sans:     'Syne', sans-serif;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bot: env(safe-area-inset-bottom, 0px);
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:14px;-webkit-tap-highlight-color:transparent;overflow:hidden}
+
+/* ── LAYOUT ─────────────────────────────────────── */
+#shell{display:flex;flex-direction:column;height:100%;padding-top:var(--safe-top)}
+#topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px 10px;border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+#logo{font-family:var(--sans);font-weight:700;font-size:15px;letter-spacing:.05em;color:var(--accent)}
+#clock{font-size:11px;color:var(--muted);letter-spacing:.08em}
+#content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 0 calc(60px + var(--safe-bot))}
+#navbar{
+  position:fixed;bottom:0;left:0;right:0;
+  display:flex;border-top:1px solid var(--border);background:var(--bg);
+  padding-bottom:var(--safe-bot);z-index:100;
+}
+.nav-btn{
+  flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:10px 4px 8px;border:none;background:none;color:var(--muted);
+  font-family:var(--mono);font-size:9px;letter-spacing:.06em;cursor:pointer;
+  transition:color .15s;
+}
+.nav-btn svg{width:20px;height:20px;stroke-width:1.5}
+.nav-btn.active{color:var(--accent)}
+
+/* ── PAGES ───────────────────────────────────────── */
+.page{display:none;padding:16px}
+.page.active{display:block}
+.page-title{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:16px}
+
+/* ── CARDS ───────────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:10px}
+.card-sm{padding:10px 12px}
+
+/* ── PORTFOLIO ───────────────────────────────────── */
+#total-block{
+  background:var(--surface);border:1px solid var(--border);border-radius:6px;
+  padding:16px;margin-bottom:12px;
+}
+#total-funds-block{
+  background:var(--surface);border:1px solid var(--border);border-radius:6px;
+  padding:16px;margin-bottom:12px;
+}
+.total-label{font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px}
+.total-value{font-family:var(--sans);font-size:28px;font-weight:700;color:var(--text);letter-spacing:-.02em}
+.total-pnl{font-size:12px;margin-top:6px}
+.pnl-pos{color:var(--green)}.pnl-neg{color:var(--red)}
+
+.asset-row{
+  display:grid;grid-template-columns:1fr auto;align-items:start;
+  gap:8px;padding:12px 0;border-bottom:1px solid var(--border);
+}
+.asset-row:last-child{border-bottom:none}
+.asset-name{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--text)}
+.asset-amount{font-size:11px;color:var(--muted);margin-top:2px}
+.asset-meta{font-size:10px;color:var(--dim);margin-top:4px}
+.asset-right{text-align:right}
+.asset-value{font-size:14px;font-weight:500;color:var(--text)}
+.asset-pnl{font-size:11px;margin-top:2px}
+
+/* rate grid */
+.rates-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.rate-cell{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 12px}
+.rate-name{font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px}
+.rate-val{font-size:15px;font-weight:500;color:var(--text)}
+.rate-unit{font-size:10px;color:var(--dim)}
+
+/* tx modal */
+#tx-modal{
+  display:none;position:fixed;inset:0;z-index:200;
+  background:rgba(0,0,0,.85);align-items:flex-end;
+}
+#tx-modal.open{display:flex}
+#tx-box{
+  width:100%;background:var(--surface);border-radius:16px 16px 0 0;
+  border-top:1px solid var(--border);padding:20px 16px calc(24px + var(--safe-bot));
+}
+.tx-title{font-family:var(--sans);font-size:14px;font-weight:700;margin-bottom:16px;letter-spacing:.04em}
+
+/* ── INPUTS ──────────────────────────────────────── */
+.field{margin-bottom:12px}
+.field label{display:block;font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px}
+.field input,.field select{
+  width:100%;background:var(--surface2);border:1px solid var(--border2);
+  border-radius:4px;color:var(--text);font-family:var(--mono);font-size:14px;
+  padding:10px 12px;outline:none;transition:border-color .15s;
+}
+.field input:focus,.field select:focus{border-color:var(--accent)}
+.field select option{background:var(--surface2)}
+
+.btn{
+  width:100%;padding:12px;border:none;border-radius:4px;
+  font-family:var(--sans);font-size:13px;font-weight:700;letter-spacing:.06em;
+  cursor:pointer;transition:opacity .15s;
+}
+.btn:active{opacity:.7}
+.btn-accent{background:var(--accent);color:#0a0a0a}
+.btn-red{background:var(--red);color:#fff}
+.btn-ghost{background:transparent;border:1px solid var(--border2);color:var(--muted);margin-top:8px}
+
+.tx-tabs{display:flex;gap:8px;margin-bottom:16px}
+.tx-tab{
+  flex:1;padding:8px;border:1px solid var(--border2);border-radius:4px;
+  background:none;color:var(--muted);font-family:var(--mono);font-size:12px;cursor:pointer;
+  transition:all .15s;
+}
+.tx-tab.active{border-color:var(--accent);color:var(--accent)}
+
+/* ── WEATHER ─────────────────────────────────────── */
+#weather-hero{
+  background:var(--surface);border:1px solid var(--border);border-radius:6px;
+  padding:20px;margin-bottom:10px;display:flex;align-items:center;gap:16px;
+}
+.w-icon{font-size:52px;line-height:1}
+.w-temp{font-family:var(--sans);font-size:42px;font-weight:700;color:var(--text);line-height:1}
+.w-city{font-size:11px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-top:4px}
+.w-desc{font-size:13px;color:var(--dim);margin-top:2px}
+.w-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.w-cell{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
+.w-cell-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
+.w-cell-value{font-size:15px;font-weight:500}
+
+/* ── REMINDERS ───────────────────────────────────── */
+.reminder-item{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  gap:12px;padding:12px 0;border-bottom:1px solid var(--border);
+}
+.reminder-item:last-child{border-bottom:none}
+.reminder-badge{
+  width:8px;height:8px;border-radius:50%;background:var(--accent);
+  flex-shrink:0;margin-top:4px;
+}
+.reminder-badge.repeat{background:var(--accent2)}
+.reminder-badge.past{background:var(--dim)}
+.reminder-text{font-size:13px;color:var(--text);flex:1}
+.reminder-time{font-size:11px;color:var(--muted);margin-top:2px}
+.del-btn{
+  background:none;border:none;color:var(--dim);cursor:pointer;
+  font-size:16px;padding:0 4px;flex-shrink:0;line-height:1;
+}
+.del-btn:hover{color:var(--red)}
+
+/* repeat toggle */
+.repeat-fields{display:none}
+.repeat-fields.show{display:block}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;margin-bottom:12px;border-bottom:1px solid var(--border)}
+.toggle-row label{font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+.toggle{position:relative;width:40px;height:22px}
+.toggle input{opacity:0;width:0;height:0}
+.slider{position:absolute;inset:0;background:var(--border2);border-radius:11px;transition:.2s;cursor:pointer}
+.slider:before{content:'';position:absolute;width:16px;height:16px;left:3px;top:3px;background:var(--muted);border-radius:50%;transition:.2s}
+input:checked+.slider{background:var(--accent)}
+input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
+
+/* ── TOAST ───────────────────────────────────────── */
+#toast{
+  position:fixed;top:calc(var(--safe-top) + 60px);left:50%;transform:translateX(-50%);
+  background:var(--surface2);border:1px solid var(--border2);border-radius:4px;
+  padding:10px 16px;font-size:12px;color:var(--text);
+  opacity:0;pointer-events:none;transition:opacity .2s;z-index:500;
+  white-space:nowrap;max-width:90vw;
+}
+#toast.show{opacity:1}
+
+/* ── SPINNER ─────────────────────────────────────── */
+.spin{display:inline-block;width:16px;height:16px;border:2px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.loading-row{display:flex;align-items:center;justify-content:center;gap:10px;padding:32px;color:var(--muted);font-size:12px}
+.empty-msg{text-align:center;padding:32px;color:var(--muted);font-size:12px;line-height:1.8}
+
+/* ── REFRESH BUTTON ──────────────────────────────── */
+.refresh-btn{
+  background:none;border:1px solid var(--border);border-radius:4px;
+  color:var(--muted);font-family:var(--mono);font-size:11px;padding:5px 10px;cursor:pointer;
+  transition:all .15s;
+}
+.refresh-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── GALLERY ─────────────────────────────────────── */
+.storage-bar{height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin:8px 0 6px}
+.storage-bar-fill{height:100%;background:var(--accent);transition:width .3s}
+.gallery-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.gallery-item{
+  position:relative;aspect-ratio:1;border-radius:6px;overflow:hidden;
+  background:var(--surface2);cursor:pointer;border:1px solid var(--border);
+}
+.gallery-item img{width:100%;height:100%;object-fit:cover;display:block}
+.gi-badge{
+  position:absolute;bottom:4px;right:4px;background:rgba(0,0,0,.65);
+  color:#fff;font-size:10px;padding:2px 5px;border-radius:3px;line-height:1.2;
+}
+
+/* lightbox */
+#gallery-modal{
+  display:none;position:fixed;inset:0;z-index:300;
+  background:rgba(0,0,0,.95);
+}
+#gallery-modal.open{display:flex}
+#gallery-modal-content{
+  position:relative;width:100%;height:100%;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:calc(var(--safe-top) + 16px) 16px calc(var(--safe-bot) + 16px);
+}
+#gallery-media-wrap{
+  max-width:100%;max-height:70vh;display:flex;
+  align-items:center;justify-content:center;flex:1;width:100%;
+}
+#gallery-media-wrap img,#gallery-media-wrap video{
+  max-width:100%;max-height:70vh;border-radius:6px;display:block;
+}
+.gm-info{font-size:11px;color:var(--muted);margin-top:10px;text-align:center}
+.gm-close{
+  position:absolute;top:calc(var(--safe-top) + 10px);right:10px;
+  background:rgba(255,255,255,.08);border:none;color:#fff;
+  width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer;z-index:10;
+}
+.gm-actions{display:flex;gap:10px;width:100%;max-width:320px;margin-top:14px}
+.gm-actions .btn{width:auto;flex:1;margin-top:0}
+.gm-nav{
+  position:absolute;top:50%;transform:translateY(-50%);
+  background:rgba(255,255,255,.08);border:none;color:#fff;
+  width:38px;height:38px;border-radius:50%;font-size:20px;cursor:pointer;z-index:10;
+}
+.gm-prev{left:6px}.gm-next{right:6px}
+</style>
+</head>
+<body>
+<div id="shell">
+  <!-- Topbar -->
+  <div id="topbar">
+    <div id="logo">PI / DASHBOARD</div>
+    <div id="clock">--:--:--</div>
+  </div>
+
+  <!-- Content -->
+  <div id="content">
+
+    <!-- ── PORTFOLIO PAGE ── -->
+    <div class="page active" id="page-portfolio">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="page-title" style="margin-bottom:0">Portföy</div>
+        <button class="refresh-btn" onclick="loadPortfolio()">↻ Güncelle</button>
+      </div>
+
+      <div id="total-block">
+        <div class="total-label">Toplam Değer</div>
+        <div class="total-value" id="total-value">—</div>
+        <div class="total-pnl" id="total-pnl">—</div>
+      </div>
+
+      <div class="card" id="assets-list">
+        <div class="loading-row"><span class="spin"></span> Yükleniyor…</div>
+      </div>
+
+      <div class="page-title" style="margin-top:16px;margin-bottom:10px">Anlık Kurlar</div>
+      <div class="rates-grid" id="rates-grid">
+        <div class="rate-cell"><div class="rate-name">Dolar</div><div class="rate-val">—</div></div>
+        <div class="rate-cell"><div class="rate-name">Euro</div><div class="rate-val">—</div></div>
+        <div class="rate-cell"><div class="rate-name">Gram Altın</div><div class="rate-val">—</div></div>
+        <div class="rate-cell"><div class="rate-name">Tam Altın</div><div class="rate-val">—</div></div>
+      </div>
+
+      <button class="btn btn-accent" onclick="openTx()" style="margin-top:8px">＋ İşlem Yap</button>
+    </div>
+
+    <!-- ── WEATHER PAGE ── -->
+    <div class="page" id="page-weather">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="page-title" style="margin-bottom:0">Hava Durumu</div>
+        <button class="refresh-btn" onclick="loadWeather()">↻ Güncelle</button>
+      </div>
+      <div id="weather-hero">
+        <div class="loading-row" style="width:100%"><span class="spin"></span> Yükleniyor…</div>
+      </div>
+      <div class="w-grid" id="w-details" style="display:none">
+        <div class="w-cell">
+          <div class="w-cell-label">Hissedilen</div>
+          <div class="w-cell-value" id="w-feels">—</div>
+        </div>
+        <div class="w-cell">
+          <div class="w-cell-label">Nem</div>
+          <div class="w-cell-value" id="w-hum">—</div>
+        </div>
+        <div class="w-cell">
+          <div class="w-cell-label">Rüzgar</div>
+          <div class="w-cell-value" id="w-wind">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── REMINDERS PAGE ── -->
+    <div class="page" id="page-reminders">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="page-title" style="margin-bottom:0">Hatırlatıcılar</div>
+        <button class="refresh-btn" onclick="loadReminders()">↻ Güncelle</button>
+      </div>
+
+      <div class="card" id="reminders-list">
+        <div class="loading-row"><span class="spin"></span> Yükleniyor…</div>
+      </div>
+
+      <!-- New Reminder Form -->
+      <div class="card" style="margin-top:10px">
+        <div class="tx-title">Yeni Hatırlatıcı</div>
+
+        <div class="toggle-row">
+          <label>Tekrarlayan</label>
+          <label class="toggle">
+            <input type="checkbox" id="rep-toggle" onchange="toggleRepeat(this)"/>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="field">
+          <label>Mesaj</label>
+          <input type="text" id="rem-text" placeholder="Hatırlatıcı metni…"/>
+        </div>
+
+        <!-- Once fields -->
+        <div id="once-fields">
+          <div class="field">
+            <label>Zaman — saat veya süre</label>
+            <input type="text" id="rem-time" placeholder="14:30  veya  2saat  veya  45dk"/>
+          </div>
+        </div>
+
+        <!-- Repeat fields -->
+        <div class="repeat-fields" id="repeat-fields">
+          <div class="field">
+            <label>Tekrar</label>
+            <select id="rep-type">
+              <option value="gün">Her gün</option>
+              <option value="hafta">Her hafta</option>
+            </select>
+          </div>
+          <div class="field" id="weekday-field" style="display:none">
+            <label>Gün</label>
+            <select id="rep-day">
+              <option value="0">Pazartesi</option>
+              <option value="1">Salı</option>
+              <option value="2">Çarşamba</option>
+              <option value="3">Perşembe</option>
+              <option value="4">Cuma</option>
+              <option value="5">Cumartesi</option>
+              <option value="6">Pazar</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px">
+            <div class="field" style="flex:1">
+              <label>Saat</label>
+              <input type="number" id="rep-hour" min="0" max="23" value="8" placeholder="8"/>
+            </div>
+            <div class="field" style="flex:1">
+              <label>Dakika</label>
+              <input type="number" id="rep-min" min="0" max="59" value="0" placeholder="0"/>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-accent" onclick="createReminder()">Oluştur</button>
+      </div>
+    </div>
+
+    <!-- ── TOOLS PAGE ── -->
+    <div class="page" id="page-tools">
+      <div class="page-title">Araçlar</div>
+
+      <!-- WOL -->
+      <div class="card" style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-family:var(--sans);font-size:13px;font-weight:600;color:var(--text)">💻 Bilgisayarı Aç</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px">Wake-on-LAN magic packet gönder</div>
+          </div>
+          <button class="btn btn-accent" id="wol-btn" onclick="sendWOL()" style="width:auto;padding:10px 18px;font-size:12px">Aç</button>
+        </div>
+        <div id="wol-result" style="font-size:11px;color:var(--muted);margin-top:10px;display:none"></div>
+      </div>
+
+      <!-- Image Generation -->
+      <div class="card">
+        <div class="tx-title">🎨 Resim Oluştur</div>
+        <div class="field">
+          <label>Prompt (İngilizce yazman önerilir)</label>
+          <input type="text" id="img-prompt" placeholder="sunset over mountains, digital art"/>
+        </div>
+        <button class="btn btn-accent" id="img-btn" onclick="generateImage()">Oluştur</button>
+        <div id="img-status" style="font-size:12px;color:var(--muted);margin-top:10px;display:none"></div>
+        <div id="img-result" style="margin-top:12px;display:none">
+          <img id="img-output" src="" alt="Oluşturulan resim"
+               style="width:100%;border-radius:6px;border:1px solid var(--border);display:block"/>
+          <a id="img-download" download="resim.png"
+             style="display:block;margin-top:8px;text-align:center;font-size:11px;color:var(--accent)">↓ İndir</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── GALLERY PAGE ── -->
+    <div class="page" id="page-gallery">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="page-title" style="margin-bottom:0">Galeri</div>
+        <button class="refresh-btn" onclick="refreshGallery()">↻ Güncelle</button>
+      </div>
+
+      <!-- Storage -->
+      <div class="card" id="gallery-storage" style="margin-bottom:12px">
+        <div class="loading-row"><span class="spin"></span> Yükleniyor…</div>
+      </div>
+
+      <!-- Type filter -->
+      <div class="tx-tabs">
+        <button class="tx-tab active" data-filter="all" onclick="setGalleryFilter('all',this)">Tümü</button>
+        <button class="tx-tab" data-filter="image" onclick="setGalleryFilter('image',this)">Fotoğraf</button>
+        <button class="tx-tab" data-filter="video" onclick="setGalleryFilter('video',this)">Video</button>
+      </div>
+
+      <!-- Sort -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="font-size:10px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap">Sırala</span>
+        <select id="gallery-sort" onchange="setGallerySort(this.value)"
+          style="flex:1;background:var(--surface2);border:1px solid var(--border2);border-radius:4px;
+                 color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none">
+          <option value="date_desc">Tarih — Yeniden Eskiye</option>
+          <option value="date_asc">Tarih — Eskiden Yeniye</option>
+          <option value="name_asc">İsim — A → Z</option>
+          <option value="name_desc">İsim — Z → A</option>
+          <option value="size_desc">Boyut — Büyükten Küçüğe</option>
+          <option value="size_asc">Boyut — Küçükten Büyüğe</option>
+        </select>
+      </div>
+
+      <div class="gallery-grid" id="gallery-grid">
+        <div class="loading-row" style="grid-column:1/-1"><span class="spin"></span> Yükleniyor…</div>
+      </div>
+
+      <button class="btn btn-ghost" id="gallery-more" onclick="loadGalleryMore()" style="display:none">Daha Fazla Yükle</button>
+    </div>
+
+  </div><!-- /content -->
+
+  <!-- Navbar -->
+  <nav id="navbar">
+    <button class="nav-btn active" data-page="portfolio" onclick="switchPage('portfolio',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Portföy
+    </button>
+    <button class="nav-btn" data-page="weather" onclick="switchPage('weather',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+      Hava
+    </button>
+    <button class="nav-btn" data-page="reminders" onclick="switchPage('reminders',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      Hatırlatıcı
+    </button>
+    <button class="nav-btn" data-page="tools" onclick="switchPage('tools',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Araçlar
+    </button>
+    <button class="nav-btn" data-page="gallery" onclick="switchPage('gallery',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      Galeri
+    </button>
+  </nav>
+</div>
+
+<!-- Transaction Modal -->
+<div id="tx-modal" onclick="closeTxIfBg(event)">
+  <div id="tx-box">
+    <div class="tx-title">İşlem Yap</div>
+    <div class="tx-tabs">
+      <button class="tx-tab active" onclick="setTxMode('add',this)">＋ Ekle</button>
+      <button class="tx-tab" onclick="setTxMode('remove',this)">－ Çıkar</button>
+    </div>
+    <div class="field">
+      <label>Varlık</label>
+      <select id="tx-key">
+        <option value="usd">Dolar (USD)</option>
+        <option value="eur">Euro (EUR)</option>
+        <option value="gbp">Sterlin (GBP)</option>
+        <option value="jpy">Japon Yeni (JPY)</option>
+        <option value="gram">Gram Altın</option>
+        <option value="ceyrek">Çeyrek Altın</option>
+        <option value="yarim">Yarım Altın</option>
+        <option value="tam">Tam Altın</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Miktar</label>
+      <input type="number" id="tx-amount" placeholder="0.00" min="0" step="any"/>
+    </div>
+    <button class="btn btn-accent" id="tx-submit" onclick="submitTx()">Ekle</button>
+    <button class="btn btn-ghost" onclick="closeTx()">İptal</button>
+  </div>
+</div>
+
+<!-- Gallery Lightbox -->
+<div id="gallery-modal" onclick="closeGalleryIfBg(event)">
+  <div id="gallery-modal-content">
+    <button class="gm-close" onclick="closeGalleryModal()">✕</button>
+    <button class="gm-nav gm-prev" onclick="navGallery(-1)">‹</button>
+    <div id="gallery-media-wrap"></div>
+    <button class="gm-nav gm-next" onclick="navGallery(1)">›</button>
+    <div class="gm-info" id="gallery-modal-info"></div>
+    <div class="gm-actions">
+      <button class="btn btn-accent" onclick="downloadGalleryItem()">↓ İndir</button>
+      <button class="btn btn-red" onclick="deleteGalleryItem()">🗑 Sil</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// UTILS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const fmt  = n => new Intl.NumberFormat('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n);
+const fmtK = n => n >= 1000 ? (n/1000).toFixed(1)+'K' : fmt(n);
+
+function toast(msg, dur=2200){
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'), dur);
+}
+
+async function api(path, opts={}){
+  try {
+    const r = await fetch(path, {timeout: 15000, ...opts});
+    if(!r.ok){
+      let errMsg = 'Bilinmeyen hata';
+      try {
+        const e = await r.json();
+        errMsg = e.detail || e.error || e.message || errMsg;
+      } catch {
+        errMsg = `Hata: ${r.status} ${r.statusText}`;
+      }
+      throw new Error(errMsg);
+    }
+    return await r.json();
+  } catch(e) {
+    if(e.name === 'AbortError') {
+      throw new Error('İstek zaman aşımına uğradı');
+    }
+    throw e;
+  }
+}
+
+// ── Clock ─────────────────────────────────────────────
+function tick(){
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+setInterval(tick, 1000); tick();
+
+// ── Page switch ───────────────────────────────────────
+function switchPage(name, btn){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  btn.classList.add('active');
+  if(name==='portfolio') loadPortfolio();
+  else if(name==='weather') loadWeather();
+  else if(name==='reminders') loadReminders();
+  else if(name==='gallery') refreshGallery();
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PORTFOLIO
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function loadPortfolio(){
+  document.getElementById('assets-list').innerHTML =
+    '<div class="loading-row"><span class="spin"></span> Yükleniyor…</div>';
+  try{
+    const d = await api('/api/portfolio');
+
+    // Total
+    document.getElementById('total-value').textContent = fmt(d.total_value)+' TL';
+    const pnl = d.total_pnl, pct = d.total_pnl_pct;
+    const cls = pnl>=0?'pnl-pos':'pnl-neg';
+    const sign = pnl>=0?'▲':'▼';
+    document.getElementById('total-pnl').innerHTML =
+      `<span class="${cls}">${sign} ${fmt(Math.abs(pnl))} TL &nbsp;(${pct>=0?'+':''}${pct.toFixed(2)}%)</span>` +
+      `&nbsp;&nbsp;<span style="color:var(--muted);font-size:11px">Maliyet: ${fmt(d.total_cost)} TL</span>`;
+
+    // Assets
+    const box = document.getElementById('assets-list');
+    if(!d.items.length){
+      box.innerHTML = '<div class="empty-msg">Portföyünüz boş.<br/>İşlem Yap butonuyla ekleyin.</div>';
+    } else {
+      box.innerHTML = d.items.map(it=>{
+        const pc = it.pnl>=0, sign2=pc?'▲':'▼', cls2=pc?'pnl-pos':'pnl-neg';
+        return `<div class="asset-row">
+          <div>
+            <div class="asset-name">${it.name}</div>
+            <div class="asset-amount">${fmt(it.amount)} ${it.symbol}</div>
+            <div class="asset-meta">Ort: ${fmt(it.avg_rate)} TL · Anlık: ${fmt(it.rate)} TL</div>
+          </div>
+          <div class="asset-right">
+            <div class="asset-value">${fmt(it.value)} TL</div>
+            <div class="asset-pnl ${cls2}">${sign2} ${fmt(Math.abs(it.pnl))} (${it.pnl_pct>=0?'+':''}${it.pnl_pct.toFixed(2)}%)</div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // Rates grid
+    const rg = document.getElementById('rates-grid');
+    const show = [
+      ['usd','Dolar','$'],['eur','Euro','€'],
+      ['gram','Gram Altın','gr'],['tam','Tam Altın','₺'],
+    ];
+    rg.innerHTML = show.map(([k,n,sym])=>
+      `<div class="rate-cell">
+        <div class="rate-name">${n}</div>
+        <div class="rate-val">${fmt(d.rates[k]||0)}</div>
+        <div class="rate-unit">TL</div>
+      </div>`
+    ).join('');
+
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+// ── TX Modal ──────────────────────────────────────────
+let txMode = 'add';
+function openTx(){ document.getElementById('tx-modal').classList.add('open'); }
+function closeTx(){ document.getElementById('tx-modal').classList.remove('open'); document.getElementById('tx-amount').value=''; }
+function closeTxIfBg(e){ if(e.target===document.getElementById('tx-modal')) closeTx(); }
+function setTxMode(m, btn){
+  txMode = m;
+  document.querySelectorAll('.tx-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tx-submit').textContent = m==='add'?'Ekle':'Çıkar';
+  document.getElementById('tx-submit').className = 'btn '+(m==='add'?'btn-accent':'btn-red');
+}
+async function submitTx(){
+  const key    = document.getElementById('tx-key').value;
+  const amount = parseFloat(document.getElementById('tx-amount').value);
+  if(!amount||amount<=0){ toast('Geçerli bir miktar girin'); return; }
+  try{
+    const d = await api('/api/portfolio/'+txMode, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({key, amount})
+    });
+    const msg = txMode==='add'
+      ? `✓ Eklendi — Alış: ${fmt(d.rate)} TL · Ödenen: ${fmt(d.cost)} TL`
+      : '✓ Çıkarıldı';
+    toast(msg, 3000);
+    closeTx(); loadPortfolio();
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// WEATHER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const OWM_ICONS = {
+  '01':'☀️','02':'⛅','03':'☁️','04':'☁️',
+  '09':'🌧️','10':'🌦️','11':'⛈️','13':'❄️','50':'🌫️'
+};
+function owmIcon(code){ return OWM_ICONS[code.slice(0,2)] || '🌡️'; }
+
+async function loadWeather(){
+  document.getElementById('weather-hero').innerHTML =
+    '<div class="loading-row" style="width:100%"><span class="spin"></span> Yükleniyor…</div>';
+  document.getElementById('w-details').style.display='none';
+  try{
+    const d = await api('/api/weather');
+    document.getElementById('weather-hero').innerHTML = `
+      <div class="w-icon">${owmIcon(d.icon)}</div>
+      <div>
+        <div class="w-temp">${d.temp}°C</div>
+        <div class="w-city">${d.city}</div>
+        <div class="w-desc">${d.desc}</div>
+      </div>`;
+    document.getElementById('w-feels').textContent  = d.feels_like+'°C';
+    document.getElementById('w-hum').textContent    = d.humidity+'%';
+    document.getElementById('w-wind').textContent   = d.wind+' km/h';
+    document.getElementById('w-details').style.display='grid';
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// REMINDERS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function loadReminders(){
+  document.getElementById('reminders-list').innerHTML =
+    '<div class="loading-row"><span class="spin"></span> Yükleniyor…</div>';
+  try{
+    const list = await api('/api/reminders');
+    const box  = document.getElementById('reminders-list');
+    if(!list.length){
+      box.innerHTML = '<div class="empty-msg">Henüz hatırlatıcı yok.<br/>Aşağıdan oluşturun.</div>';
+      return;
+    }
+    box.innerHTML = list.map(r=>{
+      const isRepeat = r.type==='repeat';
+      const badgeCls = isRepeat?'repeat':(r.is_past?'past':'');
+      const timeStr  = isRepeat ? r.repeat_label : r.fire_str;
+      return `<div class="reminder-item">
+        <span class="reminder-badge ${badgeCls}"></span>
+        <div style="flex:1">
+          <div class="reminder-text">${r.text}</div>
+          <div class="reminder-time">${timeStr}</div>
+        </div>
+        <button class="del-btn" onclick="deleteReminder('${r.id_short}')">✕</button>
+      </div>`;
+    }).join('');
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+function toggleRepeat(cb){
+  document.getElementById('once-fields').style.display   = cb.checked?'none':'block';
+  document.getElementById('repeat-fields').classList.toggle('show', cb.checked);
+}
+
+document.getElementById('rep-type').addEventListener('change', function(){
+  document.getElementById('weekday-field').style.display = this.value==='hafta'?'block':'none';
+});
+
+async function createReminder(){
+  const text = document.getElementById('rem-text').value.trim();
+  if(!text){ toast('Mesaj boş olamaz'); return; }
+  const isRepeat = document.getElementById('rep-toggle').checked;
+  let body;
+  if(isRepeat){
+    body = {
+      type: 'repeat',
+      text,
+      repeat_type: document.getElementById('rep-type').value,
+      weekday: parseInt(document.getElementById('rep-day').value),
+      hour:    parseInt(document.getElementById('rep-hour').value)||0,
+      minute:  parseInt(document.getElementById('rep-min').value)||0,
+    };
+  } else {
+    const t = document.getElementById('rem-time').value.trim();
+    if(!t){ toast('Zaman girilmedi'); return; }
+    body = { type:'once', text, fire_at: t };
+  }
+  try{
+    const d = await api('/api/reminders',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    toast(`✓ Oluşturuldu [${d.id}]`);
+    document.getElementById('rem-text').value='';
+    document.getElementById('rem-time').value='';
+    loadReminders();
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+async function deleteReminder(id){
+  try{
+    await api('/api/reminders/'+id,{method:'DELETE'});
+    toast('Silindi'); loadReminders();
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// WOL
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function sendWOL(){
+  const btn = document.getElementById('wol-btn');
+  const res = document.getElementById('wol-result');
+  btn.disabled = true; btn.textContent = '…';
+  res.style.display = 'block';
+  res.style.color = 'var(--muted)';
+  res.textContent = 'Magic packet gönderiliyor…';
+  try{
+    const d = await api('/api/wol', {method:'POST'});
+    res.style.color = 'var(--green)';
+    res.textContent = '✓ Gönderildi! Bilgisayar yakında açılacak.';
+    toast('✓ Magic packet gönderildi');
+  } catch(e){
+    res.style.color = 'var(--red)';
+    res.textContent = '✕ ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = 'Aç';
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// IMAGE GENERATION
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function generateImage(){
+  const prompt = document.getElementById('img-prompt').value.trim();
+  if(!prompt){ toast('Prompt boş olamaz'); return; }
+  const btn    = document.getElementById('img-btn');
+  const status = document.getElementById('img-status');
+  const result = document.getElementById('img-result');
+  btn.disabled = true; btn.textContent = '⏳ Oluşturuluyor…';
+  status.style.display = 'block';
+  status.style.color   = 'var(--muted)';
+  status.textContent   = 'Model çalışıyor, 20–40 saniye sürebilir…';
+  result.style.display = 'none';
+  try{
+    const d = await api('/api/generate-image', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({prompt})
+    });
+    const src = 'data:image/png;base64,' + d.image;
+    document.getElementById('img-output').src    = src;
+    document.getElementById('img-download').href = src;
+    result.style.display  = 'block';
+    status.style.display  = 'none';
+    toast('✓ Resim oluşturuldu!');
+  } catch(e){
+    status.style.color   = 'var(--red)';
+    status.textContent   = '✕ ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = 'Oluştur';
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GALLERY
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let galleryPage   = 1;
+let galleryFilter = 'all';
+let gallerySort   = 'date_desc';
+let galleryItems  = [];
+let galleryHasMore = false;
+let galleryIndex  = -1;
+
+function fmtBytes(n){
+  if(n >= 1024**3) return (n/1024**3).toFixed(2)+' GB';
+  if(n >= 1024**2) return (n/1024**2).toFixed(1)+' MB';
+  if(n >= 1024)    return (n/1024).toFixed(1)+' KB';
+  return n+' B';
+}
+
+async function loadGalleryStorage(){
+  const box = document.getElementById('gallery-storage');
+  try{
+    const d = await api('/api/gallery/storage');
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div class="total-label" style="margin-bottom:0">SSD Kullanımı</div>
+        <div style="font-size:11px;color:var(--muted)">${d.file_count} dosya</div>
+      </div>
+      <div class="storage-bar"><div class="storage-bar-fill" style="width:${d.used_pct}%"></div></div>
+      <div style="font-size:11px;color:var(--muted)">${fmt(d.used_gb)} GB / ${fmt(d.total_gb)} GB &nbsp;(%${fmt(d.used_pct)})</div>`;
+  } catch(e){
+    box.innerHTML = `<div class="empty-msg">❌ ${e.message}</div>`;
+  }
+}
+
+function setGallerySort(s){
+  gallerySort = s;
+  galleryPage = 1; galleryItems = [];
+  loadGalleryPage(true);
+}
+
+function setGalleryFilter(f, btn){
+  if(galleryFilter === f) return;
+  galleryFilter = f;
+  document.querySelectorAll('#page-gallery .tx-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  galleryPage = 1; galleryItems = [];
+  loadGalleryPage(true);
+}
+
+function refreshGallery(){
+  loadGalleryStorage();
+  galleryPage = 1; galleryItems = [];
+  loadGalleryPage(true);
+}
+
+async function loadGalleryPage(reset=false){
+  const grid = document.getElementById('gallery-grid');
+  if(reset){
+    grid.innerHTML = '<div class="loading-row" style="grid-column:1/-1"><span class="spin"></span> Yükleniyor…</div>';
+  }
+  try{
+    const refreshParam = reset ? '&refresh=true' : '';
+    const d = await api(`/api/gallery?page=${galleryPage}&limit=30&type=${galleryFilter}&sort=${gallerySort}${refreshParam}`);
+    galleryItems = reset ? d.items : galleryItems.concat(d.items);
+    galleryHasMore = galleryPage < d.pages;
+    renderGalleryGrid();
+    document.getElementById('gallery-more').style.display = galleryHasMore ? 'block' : 'none';
+  } catch(e){
+    grid.innerHTML = `<div class="empty-msg" style="grid-column:1/-1">❌ ${e.message}</div>`;
+    document.getElementById('gallery-more').style.display = 'none';
+  }
+}
+
+function loadGalleryMore(){
+  galleryPage++;
+  loadGalleryPage(false);
+}
+
+function renderGalleryGrid(){
+  const grid = document.getElementById('gallery-grid');
+  if(!galleryItems.length){
+    grid.innerHTML = '<div class="empty-msg" style="grid-column:1/-1">Henüz fotoğraf/video yok.</div>';
+    return;
+  }
+  grid.innerHTML = galleryItems.map((it,i)=>`
+    <div class="gallery-item" onclick="openGalleryModal(${i})">
+      <img src="/api/gallery/thumb/${it.id}" loading="lazy" alt=""/>
+      ${it.type==='video' ? '<span class="gi-badge">▶ Video</span>' : ''}
+    </div>`).join('');
+}
+
+// ── Lightbox ────────────────────────────────────────
+function openGalleryModal(i){
+  galleryIndex = i;
+  renderGalleryModal();
+  document.getElementById('gallery-modal').classList.add('open');
+}
+function closeGalleryModal(){
+  document.getElementById('gallery-modal').classList.remove('open');
+  document.getElementById('gallery-media-wrap').innerHTML = '';
+}
+function closeGalleryIfBg(e){
+  if(e.target === document.getElementById('gallery-modal')) closeGalleryModal();
+}
+function renderGalleryModal(){
+  const it = galleryItems[galleryIndex];
+  if(!it) return;
+  const wrap = document.getElementById('gallery-media-wrap');
+  wrap.innerHTML = it.type === 'video'
+    ? `<video src="/api/gallery/file/${it.id}" controls playsinline></video>`
+    : `<img src="/api/gallery/file/${it.id}" alt=""/>`;
+  document.getElementById('gallery-modal-info').textContent =
+    `${it.name} · ${fmtBytes(it.size)} · ${it.date}`;
+
+  document.querySelector('.gm-prev').style.visibility = galleryIndex > 0 ? 'visible' : 'hidden';
+  document.querySelector('.gm-next').style.visibility = galleryIndex < galleryItems.length-1 ? 'visible' : 'hidden';
+}
+function navGallery(dir){
+  const ni = galleryIndex + dir;
+  if(ni < 0 || ni >= galleryItems.length) return;
+  galleryIndex = ni;
+  renderGalleryModal();
+}
+function downloadGalleryItem(){
+  const it = galleryItems[galleryIndex];
+  if(!it) return;
+  const a = document.createElement('a');
+  a.href = `/api/gallery/download/${it.id}`;
+  a.download = it.name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function deleteGalleryItem(){
+  const it = galleryItems[galleryIndex];
+  if(!it) return;
+  if(!confirm(`"${it.name}" silinsin mi? Bu işlem geri alınamaz.`)) return;
+  try{
+    await api('/api/gallery/'+it.id, {method:'DELETE'});
+    toast('✓ Silindi');
+    galleryItems.splice(galleryIndex, 1);
+    if(!galleryItems.length){
+      closeGalleryModal();
+    } else {
+      galleryIndex = Math.min(galleryIndex, galleryItems.length-1);
+      renderGalleryModal();
+    }
+    renderGalleryGrid();
+    loadGalleryStorage();
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+
+loadPortfolio();
+// Her 3 dakikada portföyü otomatik yenile
+setInterval(loadPortfolio, 3*60*1000);
+
+// PWA Service Worker
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/static/sw.js').catch(()=>{});
+}
+</script>
+</body>
+</html>
