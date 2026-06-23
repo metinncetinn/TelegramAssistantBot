@@ -155,7 +155,7 @@ def get_rates(use_cache=True):
         r = requests.get(ALTINKAYNAK_CURRENCY_URL, timeout=10)
         if r.ok:
             for item in r.json():
-                k, v = item.get('Kod', '').upper(), item.get('ALis', '0')
+                k, v = item.get('Kod', '').upper(), item.get('Satis', '0')
                 if k == 'USD':   rates['usd'] = parse_tr(v)
                 elif k == 'EUR': rates['eur'] = parse_tr(v)
                 elif k == 'GBP': rates['gbp'] = parse_tr(v)
