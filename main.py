@@ -24,8 +24,28 @@ WOL_MAC_ADDRESS     = os.getenv('WOL_MAC_ADDRESS', '')
 HUGGINGFACE_TOKEN   = os.getenv('HUGGINGFACE_TOKEN', '')
 
 # Galeri — fotoğraf/video deposu (genelde Tailscale/Syncthing ile dolan SSD klasörü)
-GALLERY_DIR = os.getenv('GALLERY_DIR', '...')
+GALLERY_DIR = os.getenv('GALLERY_DIR', '/mnt/ssd/gallery')
 THUMB_DIR   = os.path.join(BASE_DIR, 'gallery_thumbs')
+
+# Push bildirimleri — VAPID anahtarları ve abonelik deposu
+VAPID_PRIVATE_KEY_FILE = os.path.join(BASE_DIR, 'vapid_private.pem')
+VAPID_PUBLIC_KEY_FILE  = os.path.join(BASE_DIR, 'vapid_public.pem')
+VAPID_EMAIL            = os.getenv('VAPID_EMAIL', 'mailto:admin@pidashboard.local')
+SUBSCRIPTIONS_FILE     = os.path.join(BASE_DIR, 'subscriptions.json')
+
+# VAPID public key'i tarayıcı formatına (base64url raw) çevir
+VAPID_PUBLIC_KEY_B64 = None
+try:
+    from py_vapid import Vapid as _Vapid
+    from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
+    import base64 as _b64
+    if os.path.exists(VAPID_PRIVATE_KEY_FILE):
+        _v = _Vapid.from_file(VAPID_PRIVATE_KEY_FILE)
+        _raw = _v.public_key.public_bytes(_Enc.X962, _PF.UncompressedPoint)
+        VAPID_PUBLIC_KEY_B64 = _b64.urlsafe_b64encode(_raw).rstrip(b'=').decode()
+        print(f"✓ VAPID hazır: {VAPID_PUBLIC_KEY_B64[:20]}...")
+except Exception as _e:
+    print(f"⚠ VAPID init hatası (push bildirimler devre dışı): {_e}")
 
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.gif', '.bmp'}
 VIDEO_EXTS = {'.mp4', '.mov', '.avi', '.mkv', '.3gp', '.webm', '.m4v'}
@@ -135,7 +155,7 @@ def get_rates(use_cache=True):
         r = requests.get(ALTINKAYNAK_CURRENCY_URL, timeout=10)
         if r.ok:
             for item in r.json():
-                k, v = item.get('Kod', '').upper(), item.get('Alis', '0')
+                k, v = item.get('Kod', '').upper(), item.get('Satis', '0')
                 if k == 'USD':   rates['usd'] = parse_tr(v)
                 elif k == 'EUR': rates['eur'] = parse_tr(v)
                 elif k == 'GBP': rates['gbp'] = parse_tr(v)
@@ -145,11 +165,11 @@ def get_rates(use_cache=True):
         r = requests.get(ALTINKAYNAK_GOLD_URL, timeout=10)
         if r.ok:
             for item in r.json():
-                k, v = item.get('Kod', '').upper(), item.get('Alis', '0')
-                if k == 'PGA':    rates['gram']   = parse_tr(v)
-                elif k == 'PC':   rates['ceyrek'] = parse_tr(v)
-                elif k == 'PY':   rates['yarim']  = parse_tr(v)
-                elif k == 'PT':   rates['tam']    = parse_tr(v)
+                k, v = item.get('Kod', '').upper(), item.get('Satis', '0')
+                if k == 'GA':    rates['gram']   = parse_tr(v)
+                elif k == 'C':   rates['ceyrek'] = parse_tr(v)
+                elif k == 'Y':   rates['yarim']  = parse_tr(v)
+                elif k == 'T':   rates['tam']    = parse_tr(v)
     except: pass
     
     if len(rates) >= 6:
@@ -653,6 +673,94 @@ def gallery_storage():
         'used_pct': round(used / total * 100, 1) if total else 0,
         'file_count': len(data['items']),
     }
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — PUSH BİLDİRİMLERİ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.get('/api/push/vapid-public')
+def get_vapid_public():
+    if not VAPID_PUBLIC_KEY_B64:
+        raise HTTPException(500, 'VAPID anahtarı yapılandırılmadı')
+    return {'key': VAPID_PUBLIC_KEY_B64}
+
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: dict
+
+@app.post('/api/push/subscribe')
+def push_subscribe(sub: PushSubscription):
+    subs = load_json(SUBSCRIPTIONS_FILE, [])
+    for s in subs:
+        if s.get('endpoint') == sub.endpoint:
+            return {'ok': True, 'message': 'Zaten kayıtlı'}
+    subs.append({'endpoint': sub.endpoint, 'keys': sub.keys})
+    save_json(SUBSCRIPTIONS_FILE, subs)
+    return {'ok': True}
+
+@app.post('/api/push/unsubscribe')
+def push_unsubscribe(sub: PushSubscription):
+    subs = load_json(SUBSCRIPTIONS_FILE, [])
+    new = [s for s in subs if s.get('endpoint') != sub.endpoint]
+    save_json(SUBSCRIPTIONS_FILE, new)
+    return {'ok': True}
+
+def send_push_notification(sub, title, body):
+    try:
+        from pywebpush import webpush, WebPushException
+        webpush(
+            subscription_info=sub,
+            data=json.dumps({'title': title, 'body': body}),
+            vapid_private_key=VAPID_PRIVATE_KEY_FILE,
+            vapid_claims={'sub': VAPID_EMAIL},
+        )
+        return True
+    except Exception as e:
+        print(f"Push hatası: {e}")
+        return False
+
+def check_reminders_and_notify():
+    """Her dakika çalışır, zamanı gelen hatırlatıcıları push olarak gönderir."""
+    now = datetime.datetime.now(TZ)
+    reminders = load_json(REMINDERS_FILE, [])
+    subs      = load_json(SUBSCRIPTIONS_FILE, [])
+    if not subs:
+        return
+    for r in reminders:
+        should_fire = False
+        try:
+            if r['type'] == 'once':
+                fire = datetime.datetime.fromisoformat(r['fire_at'])
+                if fire.tzinfo is None:
+                    fire = TZ.localize(fire)
+                diff = (now - fire).total_seconds()
+                if 0 <= diff < 60:
+                    should_fire = True
+            elif r['type'] == 'repeat':
+                if r.get('repeat_type') == 'gün':
+                    if now.hour == r.get('hour') and now.minute == r.get('minute'):
+                        should_fire = True
+                elif r.get('repeat_type') == 'hafta':
+                    if (now.weekday() == r.get('weekday') and
+                            now.hour == r.get('hour') and
+                            now.minute == r.get('minute')):
+                        should_fire = True
+        except Exception as e:
+            print(f"Reminder kontrol hatası: {e}")
+        if should_fire:
+            for sub in subs:
+                send_push_notification(sub, '⏰ Hatırlatıcı', r['text'])
+
+def _reminder_thread():
+    while True:
+        time.sleep(60 - datetime.datetime.now().second)  # dakika başına hizala
+        try:
+            check_reminders_and_notify()
+        except Exception as e:
+            print(f"Reminder thread hatası: {e}")
+
+threading.Thread(target=_reminder_thread, daemon=True).start()
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

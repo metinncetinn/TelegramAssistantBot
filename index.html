@@ -212,6 +212,27 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
 }
 .refresh-btn:hover{border-color:var(--accent);color:var(--accent)}
 
+/* ── THEME / NOTIF BUTTONS ───────────────────────── */
+.icon-btn{
+  background:none;border:none;font-size:16px;cursor:pointer;
+  padding:4px 6px;border-radius:4px;transition:opacity .15s;line-height:1;
+  color:var(--muted);
+}
+.icon-btn:hover{opacity:.7}
+.icon-btn.active{color:var(--accent)}
+
+/* ── LIGHT THEME ─────────────────────────────────── */
+:root[data-theme="light"]{
+  --bg:      #f0f0f0;
+  --surface: #ffffff;
+  --surface2:#e8e8e8;
+  --border:  #d8d8d8;
+  --border2: #c8c8c8;
+  --text:    #1a1a1a;
+  --muted:   #888888;
+  --dim:     #bbbbbb;
+}
+
 /* ── GALLERY ─────────────────────────────────────── */
 .storage-bar{height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin:8px 0 6px}
 .storage-bar-fill{height:100%;background:var(--accent);transition:width .3s}
@@ -265,7 +286,11 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
   <!-- Topbar -->
   <div id="topbar">
     <div id="logo">PI / DASHBOARD</div>
-    <div id="clock">--:--:--</div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <button class="icon-btn" id="notif-btn" onclick="toggleNotification()" title="Bildirimler">🔔</button>
+      <button class="icon-btn" id="theme-btn" onclick="toggleTheme()" title="Tema değiştir">☀️</button>
+      <div id="clock">--:--:--</div>
+    </div>
   </div>
 
   <!-- Content -->
@@ -1001,14 +1026,96 @@ async function deleteGalleryItem(){
   } catch(e){ toast('❌ '+e.message); }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TEMA
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function applyTheme(theme){
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('theme-btn').textContent = theme === 'light' ? '🌙' : '☀️';
+}
+function toggleTheme(){
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  localStorage.setItem('theme', next);
+  applyTheme(next);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PUSH BİLDİRİMLERİ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let _pushSub = null;
+
+function urlB64ToUint8(b64){
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = atob((b64 + pad).replace(/-/g,'+').replace(/_/g,'/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+function updateNotifBtn(){
+  const btn = document.getElementById('notif-btn');
+  btn.classList.toggle('active', !!_pushSub);
+  btn.title = _pushSub ? 'Bildirimler açık (kapat)' : 'Bildirimleri etkinleştir';
+}
+
+async function initNotifications(){
+  if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    _pushSub  = await reg.pushManager.getSubscription();
+    updateNotifBtn();
+  } catch(e){ console.warn('Bildirim init:', e); }
+}
+
+async function toggleNotification(){
+  if(!('serviceWorker' in navigator) || !('PushManager' in window)){
+    toast('Bu tarayıcı push bildirimleri desteklemiyor'); return;
+  }
+  if(_pushSub){
+    try {
+      await api('/api/push/unsubscribe', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({endpoint:_pushSub.endpoint, keys:{}})
+      });
+      await _pushSub.unsubscribe();
+      _pushSub = null; updateNotifBtn();
+      toast('Bildirimler kapatıldı');
+    } catch(e){ toast('❌ '+e.message); }
+  } else {
+    const perm = await Notification.requestPermission();
+    if(perm !== 'granted'){ toast('Bildirim izni verilmedi'); return; }
+    try {
+      const {key} = await api('/api/push/vapid-public');
+      const reg   = await navigator.serviceWorker.ready;
+      const sub   = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlB64ToUint8(key)
+      });
+      const j = sub.toJSON();
+      await api('/api/push/subscribe', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({endpoint:j.endpoint, keys:j.keys})
+      });
+      _pushSub = sub; updateNotifBtn();
+      toast('✓ Bildirimler etkinleştirildi');
+    } catch(e){ toast('❌ '+e.message); }
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// INIT
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 loadPortfolio();
-// Her 3 dakikada portföyü otomatik yenile
 setInterval(loadPortfolio, 3*60*1000);
 
-// PWA Service Worker
+// Tema ve bildirim başlat
+applyTheme(localStorage.getItem('theme') || 'dark');
+
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('/static/sw.js').catch(()=>{});
+  navigator.serviceWorker.register('/static/sw.js')
+    .then(() => initNotifications())
+    .catch(()=>{});
 }
 </script>
 </body>
