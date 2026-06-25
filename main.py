@@ -364,23 +364,34 @@ def delete_reminder(rid: str):
 # API — HAVA DURUMU
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @app.get('/api/weather')
-def weather():
+def weather(city: str = ''):
     """Hava durumu + yağmur ihtimali"""
     try:
-        cached = weather_cache.get('weather')
+        location = city if city else LOCATION
+        cache_key = f'weather_{location}'
+        cached = weather_cache.get(cache_key)
         if cached:
             return cached
 
         if not OPENWEATHER_API_KEY:
             raise HTTPException(400, 'Hava durumu API anahtarı yapılandırılmadı')
 
-        url = f'https://api.openweathermap.org/data/2.5/weather?q={LOCATION}&appid={OPENWEATHER_API_KEY}&units=metric&lang=tr'
+        # Anlık hava
+        url = f'https://api.openweathermap.org/data/2.5/weather?q={location}&appid={OPENWEATHER_API_KEY}&units=metric&lang=tr'
         r = requests.get(url, timeout=10)
-
         if not r.ok:
-            raise HTTPException(r.status_code, 'Hava durumu API hatası')
-
+            raise HTTPException(r.status_code, f'Konum bulunamadı: {location}')
         d = r.json()
+
+        # Yağmur ihtimali için forecast'tan ilk dilimi al
+        url2 = f'https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric&lang=tr&cnt=1'
+        r2 = requests.get(url2, timeout=10)
+        pop = 0
+        if r2.ok:
+            f2 = r2.json()
+            if f2.get('list'):
+                pop = round(f2['list'][0].get('pop', 0) * 100)
+
         result = {
             'city': d['name'],
             'temp': round(d['main']['temp']),
@@ -389,9 +400,9 @@ def weather():
             'desc': d['weather'][0]['description'].capitalize(),
             'icon': d['weather'][0]['icon'],
             'wind': round(d['wind']['speed'] * 3.6, 1),
-            'rain_pct': round(d.get('pop', 0) * 100),
+            'rain_pct': pop,
         }
-        weather_cache.set('weather', result)
+        weather_cache.set(cache_key, result)
         return result
     except HTTPException:
         raise
