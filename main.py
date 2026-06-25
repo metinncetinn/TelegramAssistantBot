@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 import json, os, datetime, uuid, requests, pytz, time, threading, hashlib, shutil, subprocess, mimetypes
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, UploadFile
 
 load_dotenv()
 
@@ -717,6 +718,41 @@ def gallery_download(gid: str):
     media_type = mimetypes.guess_type(full)[0] or 'application/octet-stream'
     return FileResponse(full, media_type=media_type, filename=item['name'])
 
+@app.post('/api/gallery/upload')
+async def gallery_upload(files: list[UploadFile]):
+    """Birden fazla dosyayı galeri klasörüne yükle"""
+    if not os.path.isdir(GALLERY_DIR):
+        raise HTTPException(500, f'Galeri klasörü bulunamadı: {GALLERY_DIR}')
+    
+    results = []
+    for file in files:
+        try:
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext not in MEDIA_EXTS:
+                results.append({'name': file.filename, 'ok': False, 'error': 'Desteklenmeyen format'})
+                continue
+            
+            # Tarih bazlı alt klasör oluştur
+            now = datetime.datetime.now(TZ)
+            sub_dir = os.path.join(GALLERY_DIR, str(now.year), f'{now.month:02d}')
+            os.makedirs(sub_dir, exist_ok=True)
+            
+            # Aynı isimde dosya varsa numaralandır
+            save_path = os.path.join(sub_dir, file.filename)
+            if os.path.exists(save_path):
+                name, ext2 = os.path.splitext(file.filename)
+                save_path = os.path.join(sub_dir, f'{name}_{int(now.timestamp())}{ext2}')
+            
+            content = await file.read()
+            with open(save_path, 'wb') as f:
+                f.write(content)
+            
+            gallery_cache.invalidate('index')
+            results.append({'name': file.filename, 'ok': True})
+        except Exception as e:
+            results.append({'name': file.filename, 'ok': False, 'error': str(e)})
+    
+    return {'results': results, 'uploaded': sum(1 for r in results if r['ok'])}
 
 @app.delete('/api/gallery/{gid}')
 def gallery_delete(gid: str):
