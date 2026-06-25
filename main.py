@@ -363,24 +363,23 @@ def delete_reminder(rid: str):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # API — HAVA DURUMU
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 @app.get('/api/weather')
 def weather():
-    """Hava durumu"""
+    """Hava durumu + yağmur ihtimali"""
     try:
         cached = weather_cache.get('weather')
         if cached:
             return cached
-        
+
         if not OPENWEATHER_API_KEY:
             raise HTTPException(400, 'Hava durumu API anahtarı yapılandırılmadı')
-        
+
         url = f'https://api.openweathermap.org/data/2.5/weather?q={LOCATION}&appid={OPENWEATHER_API_KEY}&units=metric&lang=tr'
         r = requests.get(url, timeout=10)
-        
+
         if not r.ok:
             raise HTTPException(r.status_code, 'Hava durumu API hatası')
-        
+
         d = r.json()
         result = {
             'city': d['name'],
@@ -390,6 +389,7 @@ def weather():
             'desc': d['weather'][0]['description'].capitalize(),
             'icon': d['weather'][0]['icon'],
             'wind': round(d['wind']['speed'] * 3.6, 1),
+            'rain_pct': round(d.get('pop', 0) * 100),
         }
         weather_cache.set('weather', result)
         return result
@@ -397,6 +397,70 @@ def weather():
         raise
     except Exception as e:
         raise HTTPException(502, f'Hava durumu hatası: {str(e)}')
+
+
+@app.get('/api/weather/forecast')
+def weather_forecast(city: str = ''):
+    """5 günlük 3 saatlik tahmin — sabah (09:00) ve akşam (21:00) verileri"""
+    try:
+        location = city if city else LOCATION
+        cache_key = f'forecast_{location}'
+        cached = weather_cache.get(cache_key)
+        if cached:
+            return cached
+
+        if not OPENWEATHER_API_KEY:
+            raise HTTPException(400, 'API anahtarı yapılandırılmadı')
+
+        url = f'https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric&lang=tr&cnt=40'
+        r = requests.get(url, timeout=10)
+        if not r.ok:
+            raise HTTPException(r.status_code, f'Konum bulunamadı: {location}')
+
+        d = r.json()
+        
+        # Günlere göre grupla, sabah (06-12) ve akşam (18-24) al
+        from collections import defaultdict
+        days = defaultdict(list)
+        for item in d['list']:
+            date = item['dt_txt'].split(' ')[0]
+            days[date].append(item)
+
+        result = []
+        for date, items in sorted(days.items()):
+            morning = next((x for x in items if '09:00' in x['dt_txt']), None)
+            evening = next((x for x in items if '21:00' in x['dt_txt']), None)
+            main_item = morning or evening or items[0]
+            
+            # Günün min/max sıcaklığı
+            temps = [x['main']['temp'] for x in items]
+            rain_pcts = [x.get('pop', 0) for x in items]
+            
+            result.append({
+                'date': date,
+                'min_temp': round(min(temps)),
+                'max_temp': round(max(temps)),
+                'rain_pct': round(max(rain_pcts) * 100),
+                'icon': main_item['weather'][0]['icon'],
+                'desc': main_item['weather'][0]['description'].capitalize(),
+                'morning': {
+                    'temp': round(morning['main']['temp']) if morning else None,
+                    'icon': morning['weather'][0]['icon'] if morning else None,
+                    'desc': morning['weather'][0]['description'].capitalize() if morning else None,
+                } if morning else None,
+                'evening': {
+                    'temp': round(evening['main']['temp']) if evening else None,
+                    'icon': evening['weather'][0]['icon'] if evening else None,
+                    'desc': evening['weather'][0]['description'].capitalize() if evening else None,
+                } if evening else None,
+            })
+
+        weather_cache.set(cache_key, result)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f'Tahmin hatası: {str(e)}')
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
