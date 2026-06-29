@@ -503,16 +503,32 @@ def wake_on_lan():
 
 class ImageReq(BaseModel):
     prompt: str
+    size: str = '1024x1024'
 
 @app.post('/api/generate-image')
 def generate_image(req: ImageReq):
     if not HUGGINGFACE_TOKEN or HUGGINGFACE_TOKEN == '?':
         raise HTTPException(500, 'HUGGINGFACE_TOKEN tanımlı değil')
     try:
+        # Boyut parametresi
+        width, height = 1024, 1024
+        if 'x' in req.size:
+            parts = req.size.split('x')
+            try:
+                width  = int(parts[0])
+                height = int(parts[1])
+            except: pass
+
         r = requests.post(
             'https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell',
             headers={'Authorization': f'Bearer {HUGGINGFACE_TOKEN}'},
-            json={'inputs': req.prompt},
+            json={
+                'inputs': req.prompt,
+                'parameters': {
+                    'width': width,
+                    'height': height,
+                }
+            },
             timeout=120
         )
         if r.status_code == 401: raise HTTPException(401, 'Geçersiz Hugging Face token')
