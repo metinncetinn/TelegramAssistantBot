@@ -204,6 +204,14 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
 .loading-row{display:flex;align-items:center;justify-content:center;gap:10px;padding:32px;color:var(--muted);font-size:12px}
 .empty-msg{text-align:center;padding:32px;color:var(--muted);font-size:12px;line-height:1.8}
 
+/* ── STYLE CHIPS (resim üretme) ─────────────────── */
+.style-chip{
+  white-space:nowrap;padding:5px 12px;border:1px solid var(--border2);border-radius:20px;
+  font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer;
+  background:none;transition:all .15s;flex-shrink:0;
+}
+.style-chip.active{border-color:var(--accent);color:var(--accent)}
+
 /* ── REFRESH BUTTON ──────────────────────────────── */
 .refresh-btn{
   background:none;border:1px solid var(--border);border-radius:4px;
@@ -450,18 +458,64 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
       <!-- Image Generation -->
       <div class="card">
         <div class="tx-title">🎨 Resim Oluştur</div>
+
         <div class="field">
           <label>Prompt (İngilizce yazman önerilir)</label>
-          <input type="text" id="img-prompt" placeholder="sunset over mountains, digital art"/>
+          <input type="text" id="img-prompt" placeholder="sunset over mountains, golden hour..."/>
         </div>
+
+        <!-- Stil seçimi -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Stil</div>
+          <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none" id="style-chips">
+            <button class="style-chip active" data-style="" onclick="selectStyle('',this)">Varsayılan</button>
+            <button class="style-chip" data-style="digital art" onclick="selectStyle('digital art',this)">Dijital Sanat</button>
+            <button class="style-chip" data-style="photorealistic" onclick="selectStyle('photorealistic',this)">Fotoğrafik</button>
+            <button class="style-chip" data-style="anime style" onclick="selectStyle('anime style',this)">Anime</button>
+            <button class="style-chip" data-style="oil painting" onclick="selectStyle('oil painting',this)">Yağlı Boya</button>
+            <button class="style-chip" data-style="watercolor" onclick="selectStyle('watercolor',this)">Suluboya</button>
+            <button class="style-chip" data-style="pencil sketch" onclick="selectStyle('pencil sketch',this)">Karakalem</button>
+            <button class="style-chip" data-style="cinematic" onclick="selectStyle('cinematic',this)">Sinematik</button>
+            <button class="style-chip" data-style="minimalist" onclick="selectStyle('minimalist',this)">Minimalist</button>
+            <button class="style-chip" data-style="3d render" onclick="selectStyle('3d render',this)">3D Render</button>
+          </div>
+        </div>
+
+        <!-- Boyut seçimi -->
+        <div class="field">
+          <label>Boyut</label>
+          <select id="img-size">
+            <option value="512x512">512×512 (Hızlı)</option>
+            <option value="768x768">768×768</option>
+            <option value="1024x1024" selected>1024×1024 (Kaliteli)</option>
+            <option value="1024x576">1024×576 (Geniş)</option>
+            <option value="576x1024">576×1024 (Dikey)</option>
+            <option value="1080x1920">1080×1920 (DikeyHD)</option>
+            <option value="1920x1080">1920×1080 (YatayHD)</option>
+          </select>
+        </div>
+
         <button class="btn btn-accent" id="img-btn" onclick="generateImage()">Oluştur</button>
         <div id="img-status" style="font-size:12px;color:var(--muted);margin-top:10px;display:none"></div>
+
         <div id="img-result" style="margin-top:12px;display:none">
           <img id="img-output" src="" alt="Oluşturulan resim"
-               style="width:100%;border-radius:6px;border:1px solid var(--border);display:block"/>
-          <a id="img-download" download="resim.png"
-             style="display:block;margin-top:8px;text-align:center;font-size:11px;color:var(--accent)">↓ İndir</a>
+               style="width:100%;border-radius:6px;border:1px solid var(--border);display:block;cursor:pointer"
+               onclick="openImgLightbox()"/>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-ghost" onclick="downloadGeneratedImg()" style="margin-top:0;flex:1;font-size:12px">↓ İndir</button>
+            <button class="btn btn-ghost" onclick="saveImgToGallery()" style="margin-top:0;flex:1;font-size:12px">📁 Galeriye Ekle</button>
+          </div>
         </div>
+      </div>
+
+      <!-- Geçmiş -->
+      <div id="img-history-section" style="display:none;margin-top:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div class="page-title" style="margin-bottom:0">Geçmiş</div>
+          <button class="refresh-btn" onclick="clearImgHistory()">Temizle</button>
+        </div>
+        <div class="gallery-grid" id="img-history-grid"></div>
       </div>
     </div>
 
