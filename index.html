@@ -313,6 +313,15 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
         <div class="loading-row"><span class="spin"></span> Yükleniyor…</div>
       </div>
 
+      <!-- Pasta Grafiği -->
+      <div class="card" id="pie-card" style="display:none;margin-bottom:10px">
+        <div class="total-label" style="margin-bottom:12px">VARLIK DAĞILIMI</div>
+        <div style="display:flex;align-items:center;gap:16px">
+          <canvas id="pie-canvas" width="140" height="140" style="flex-shrink:0"></canvas>
+          <div id="pie-legend" style="flex:1;font-size:11px"></div>
+        </div>
+      </div>
+
       <div class="page-title" style="margin-top:16px;margin-bottom:10px">Anlık Kurlar</div>
       <div class="rates-grid" id="rates-grid">
         <div class="rate-cell"><div class="rate-name">Dolar</div><div class="rate-val">—</div></div>
@@ -701,7 +710,56 @@ async function loadPortfolio(){
       </div>`
     ).join('');
 
+    // Pasta grafiği
+    if(d.items.length > 0){
+      drawPieChart(d.items, d.total_value);
+      document.getElementById('pie-card').style.display = 'block';
+    } else {
+      document.getElementById('pie-card').style.display = 'none';
+    }
+
   } catch(e){ toast('❌ '+e.message); }
+}
+
+function drawPieChart(items, total){
+  const COLORS = ['#c8ff00','#00d4ff','#ff9800','#e91e63','#9c27b0','#00bcd4','#4caf50','#ff5722'];
+  const canvas = document.getElementById('pie-canvas');
+  const ctx    = canvas.getContext('2d');
+  const cx = canvas.width/2, cy = canvas.height/2, r = 56, hole = 30;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  let startAngle = -Math.PI / 2;
+  items.forEach((it, i) => {
+    const slice = (it.value / total) * 2 * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, startAngle, startAngle + slice);
+    ctx.closePath();
+    ctx.fillStyle = COLORS[i % COLORS.length];
+    ctx.fill();
+    // İnce boşluk
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#0a0a0a';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    startAngle += slice;
+  });
+
+  // Ortadaki delik
+  ctx.beginPath();
+  ctx.arc(cx, cy, hole, 0, 2 * Math.PI);
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--surface').trim() || '#111';
+  ctx.fill();
+
+  // Legend
+  const legend = document.getElementById('pie-legend');
+  legend.innerHTML = items.map((it, i) => {
+    const pct = (it.value / total * 100).toFixed(1);
+    return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="width:10px;height:10px;border-radius:50%;background:${COLORS[i % COLORS.length]};flex-shrink:0;display:inline-block"></span>
+      <span style="flex:1;color:var(--text)">${it.name}</span>
+      <span style="color:var(--muted)">%${pct}</span>
+    </div>`;
+  }).join('');
 }
 
 // ── TX Modal ──────────────────────────────────────────
