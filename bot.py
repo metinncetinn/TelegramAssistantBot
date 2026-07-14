@@ -214,11 +214,21 @@ def get_weather():
         return "Hava durumu alınamadı"
 
 # --- IMAGE GENERATION FUNCTION ---
-def generate_image(prompt):
-    """Hugging Face Inference API ile resim oluşturur"""
+def generate_image(prompt, size="1024x1024"):
+    """Hugging Face Inference API ile belirli boyutlarda resim oluşturur"""
     try:
         if not HUGGINGFACE_TOKEN or HUGGINGFACE_TOKEN == '?':
             return False, "HUGGINGFACE_TOKEN ayarlanmamış!"
+        
+        # Boyut analizi (Varsayılan: 1024x1024)
+        width, height = 1024, 1024
+        if size and 'x' in size:
+            parts = size.split('x')
+            try:
+                width = int(parts[0])
+                height = int(parts[1])
+            except ValueError:
+                pass  # Dönüşüm başarısız olursa varsayılan 1024x1024 kalır
         
         api_url = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
         
@@ -226,11 +236,16 @@ def generate_image(prompt):
             "Authorization": f"Bearer {HUGGINGFACE_TOKEN}"
         }
         
+        # Payload içine parameters ekleyerek genişlik ve yükseklik değerlerini gönderiyoruz
         payload = {
-            "inputs": prompt
+            "inputs": prompt,
+            "parameters": {
+                "width": width,
+                "height": height
+            }
         }
         
-        print(f"🎨 Resim oluşturuluyor: {prompt}")
+        print(f"🎨 Resim oluşturuluyor ({width}x{height}): {prompt}")
         
         response = requests.post(api_url, headers=headers, json=payload, timeout=120)
         
