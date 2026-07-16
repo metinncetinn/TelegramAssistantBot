@@ -490,8 +490,6 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
             <option value="1024x1024" selected>1024×1024 (Kaliteli)</option>
             <option value="1024x576">1024×576 (Geniş)</option>
             <option value="576x1024">576×1024 (Dikey)</option>
-            <option value="1080x1920">1080×1920 (DikeyHD)</option>
-            <option value="1920x1080">1920×1080 (YatayHD)</option>
           </select>
         </div>
 
@@ -979,9 +977,25 @@ async function sendWOL(){
 // IMAGE GENERATION
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// IMAGE GENERATION
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let _imgStyle = '';
+let _imgCurrentBase64 = null;
+
+function selectStyle(style, btn){
+  _imgStyle = style;
+  document.querySelectorAll('.style-chip').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
 async function generateImage(){
   const prompt = document.getElementById('img-prompt').value.trim();
   if(!prompt){ toast('Prompt boş olamaz'); return; }
+  const size   = document.getElementById('img-size').value;
+  const fullPrompt = _imgStyle ? `${prompt}, ${_imgStyle}` : prompt;
+
   const btn    = document.getElementById('img-btn');
   const status = document.getElementById('img-status');
   const result = document.getElementById('img-result');
@@ -990,23 +1004,99 @@ async function generateImage(){
   status.style.color   = 'var(--muted)';
   status.textContent   = 'Model çalışıyor, 20–40 saniye sürebilir…';
   result.style.display = 'none';
+  _imgCurrentBase64 = null;
+
   try{
     const d = await api('/api/generate-image', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({prompt})
+      body: JSON.stringify({prompt: fullPrompt, size})
     });
     const src = 'data:image/png;base64,' + d.image;
-    document.getElementById('img-output').src    = src;
-    document.getElementById('img-download').href = src;
+    _imgCurrentBase64 = d.image;
+    document.getElementById('img-output').src = src;
     result.style.display  = 'block';
     status.style.display  = 'none';
     toast('✓ Resim oluşturuldu!');
+    // Geçmişe kaydet
+    saveImgHistory(d.image, prompt, _imgStyle, size);
+    renderImgHistory();
   } catch(e){
     status.style.color   = 'var(--red)';
     status.textContent   = '✕ ' + e.message;
   }
   btn.disabled = false; btn.textContent = 'Oluştur';
 }
+
+function downloadGeneratedImg(){
+  if(!_imgCurrentBase64){ toast('Önce resim oluşturun'); return; }
+  const a = document.createElement('a');
+  a.href = 'data:image/png;base64,' + _imgCurrentBase64;
+  a.download = `pi_image_${Date.now()}.png`;
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('✓ İndiriliyor…');
+}
+
+async function saveImgToGallery(){
+  if(!_imgCurrentBase64){ toast('Önce resim oluşturun'); return; }
+  try{
+    const blob = await fetch('data:image/png;base64,' + _imgCurrentBase64).then(r=>r.blob());
+    const file = new File([blob], `pi_image_${Date.now()}.png`, {type:'image/png'});
+    const formData = new FormData();
+    formData.append('files', file);
+    const r = await fetch('/api/gallery/upload', {method:'POST', body:formData});
+    if(r.ok){ toast('✓ Galeriye kaydedildi'); }
+    else { toast('❌ Galeriye eklenemedi'); }
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+function openImgLightbox(){
+  if(!_imgCurrentBase64) return;
+  const w = window.open('');
+  w.document.write(`<img src="data:image/png;base64,${_imgCurrentBase64}" style="max-width:100%;display:block;margin:auto">`);
+}
+
+// ── Geçmiş ──────────────────────────────────────────
+function saveImgHistory(base64, prompt, style, size){
+  try{
+    const history = JSON.parse(localStorage.getItem('img_history')||'[]');
+    history.unshift({base64, prompt, style, size, time: Date.now()});
+    if(history.length > 20) history.length = 20;
+    localStorage.setItem('img_history', JSON.stringify(history));
+  } catch(e){}
+}
+
+function renderImgHistory(){
+  const history = JSON.parse(localStorage.getItem('img_history')||'[]');
+  const section = document.getElementById('img-history-section');
+  const grid    = document.getElementById('img-history-grid');
+  if(!history.length){ section.style.display='none'; return; }
+  section.style.display = 'block';
+  grid.innerHTML = history.map((it,i)=>`
+    <div class="gallery-item" onclick="viewImgHistory(${i})" title="${it.prompt}">
+      <img src="data:image/png;base64,${it.base64}" loading="lazy"/>
+      <span class="gi-badge" style="font-size:9px">${it.size||''}</span>
+    </div>`).join('');
+}
+
+function viewImgHistory(i){
+  const history = JSON.parse(localStorage.getItem('img_history')||'[]');
+  const it = history[i];
+  if(!it) return;
+  _imgCurrentBase64 = it.base64;
+  document.getElementById('img-output').src = 'data:image/png;base64,' + it.base64;
+  document.getElementById('img-result').style.display = 'block';
+  document.getElementById('img-prompt').value = it.prompt;
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+function clearImgHistory(){
+  if(!confirm('Geçmiş temizlensin mi?')) return;
+  localStorage.removeItem('img_history');
+  renderImgHistory();
+  toast('Geçmiş temizlendi');
+}
+
+
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // GALLERY
@@ -1297,6 +1387,8 @@ async function toggleNotification(){
 
 loadPortfolio();
 setInterval(loadPortfolio, 3*60*1000);
+renderCityChips();
+renderImgHistory();
 
 // Tema ve bildirim başlat
 applyTheme(localStorage.getItem('theme') || 'dark');

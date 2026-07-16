@@ -173,13 +173,13 @@ def get_current_rates():
                 kod = item.get('Kod', '').upper()
                 satis = item.get('Satis', '0')
                 
-                if kod == 'GA':  # Gram Altın
+                if kod == 'PGA':  # Gram Altın
                     rates['gram'] = parse_turkish_number(satis)
-                elif kod == 'C':  # Çeyrek Altın
+                elif kod == 'PC':  # Çeyrek Altın
                     rates['ceyrek'] = parse_turkish_number(satis)
-                elif kod == 'Y':  # Yarım Altın
+                elif kod == 'PY':  # Yarım Altın
                     rates['yarim'] = parse_turkish_number(satis)
-                elif kod == 'T':  # Tam Altın (Teklik)
+                elif kod == 'PT':  # Tam Altın (Teklik)
                     rates['tam'] = parse_turkish_number(satis)
             
             print(f"✅ Altın fiyatları alındı: gram={rates.get('gram', 0):.2f}")
