@@ -450,8 +450,6 @@ class ImageReq(BaseModel):
 
 @app.post('/api/generate-image')
 def generate_image(req: ImageReq):
-    if not HUGGINGFACE_TOKEN or HUGGINGFACE_TOKEN == '?':
-        raise HTTPException(500, 'HUGGINGFACE_TOKEN tanımlı değil')
     try:
         width, height = 1024, 1024
         if 'x' in req.size:
@@ -460,20 +458,18 @@ def generate_image(req: ImageReq):
                 width  = int(parts[0])
                 height = int(parts[1])
             except: pass
-        r = requests.post(
-            'https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell',
-            headers={'Authorization': f'Bearer {HUGGINGFACE_TOKEN}'},
-            json={'inputs': req.prompt, 'parameters': {'width': width, 'height': height}},
-            timeout=120
-        )
-        if r.status_code == 401: raise HTTPException(401, 'Geçersiz Hugging Face token')
-        if r.status_code == 503:
-            try:
-                wait = r.json().get('estimated_time', 30)
-                raise HTTPException(503, f'Model yükleniyor, {int(wait)}sn bekleyin')
-            except HTTPException: raise
-            except: raise HTTPException(503, 'Model yükleniyor, 30sn sonra tekrar deneyin')
+
+        # Pollinations.ai — ücretsiz, API key gerektirmez
+        import urllib.parse
+        encoded_prompt = urllib.parse.quote(req.prompt)
+        url = f'https://image.pollinations.ai/prompt/{encoded_prompt}?width={width}&height={height}&nologo=true&enhance=true'
+
+        r = requests.get(url, timeout=120)
         r.raise_for_status()
+
+        if not r.content or len(r.content) < 100:
+            raise HTTPException(500, 'Boş yanıt döndü')
+
         import base64
         return {'ok': True, 'image': base64.b64encode(r.content).decode()}
     except HTTPException: raise
