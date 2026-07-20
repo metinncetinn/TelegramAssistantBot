@@ -144,15 +144,57 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--m
 #weather-hero{
   background:var(--surface);border:1px solid var(--border);border-radius:6px;
   padding:20px;margin-bottom:10px;display:flex;align-items:center;gap:16px;
+  transition:border-color .15s;
 }
+#weather-hero:hover{border-color:var(--accent2)}
 .w-icon{font-size:52px;line-height:1}
 .w-temp{font-family:var(--sans);font-size:42px;font-weight:700;color:var(--text);line-height:1}
 .w-city{font-size:11px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-top:4px}
 .w-desc{font-size:13px;color:var(--dim);margin-top:2px}
-.w-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.w-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .w-cell{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
 .w-cell-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
 .w-cell-value{font-size:15px;font-weight:500}
+
+/* şehir chip'leri */
+.city-chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;scrollbar-width:none}
+.city-chips::-webkit-scrollbar{display:none}
+.city-chip{
+  display:flex;align-items:center;gap:4px;white-space:nowrap;
+  padding:5px 12px;border:1px solid var(--border2);border-radius:20px;
+  font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer;
+  background:none;transition:all .15s;flex-shrink:0;
+}
+.city-chip.active{border-color:var(--accent2);color:var(--accent2)}
+.city-chip .chip-del{font-size:12px;color:var(--dim);margin-left:2px;line-height:1}
+.city-chip .chip-del:hover{color:var(--red)}
+
+/* 5 günlük forecast modal */
+#forecast-modal{
+  display:none;position:fixed;inset:0;z-index:300;
+  background:rgba(0,0,0,.85);align-items:flex-end;
+}
+#forecast-modal.open{display:flex}
+#forecast-box{
+  width:100%;background:var(--surface);border-radius:16px 16px 0 0;
+  border-top:1px solid var(--border);
+  padding:20px 16px calc(24px + var(--safe-bot));
+  max-height:80vh;overflow-y:auto;
+}
+.forecast-row{
+  display:grid;grid-template-columns:52px 32px 1fr auto auto;
+  align-items:center;gap:8px;padding:12px 0;
+  border-bottom:1px solid var(--border);
+}
+.forecast-row:last-child{border-bottom:none}
+.forecast-day{font-family:var(--sans);font-size:13px;font-weight:600}
+.forecast-icon{font-size:22px;line-height:1}
+.forecast-temps{font-size:13px}
+.forecast-rain{font-size:10px;color:var(--muted);margin-top:2px}
+.forecast-time{text-align:center}
+.forecast-time-label{font-size:9px;color:var(--muted);margin-bottom:2px}
+.forecast-time-icon{font-size:16px;line-height:1}
+.forecast-time-temp{font-size:12px;font-weight:500}
 
 /* ── REMINDERS ───────────────────────────────────── */
 .reminder-item{
@@ -343,13 +385,23 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
 
     <!-- ── WEATHER PAGE ── -->
     <div class="page" id="page-weather">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div class="page-title" style="margin-bottom:0">Hava Durumu</div>
         <button class="refresh-btn" onclick="loadWeather()">↻ Güncelle</button>
       </div>
-      <div id="weather-hero">
+
+      <!-- Şehir chipleri -->
+      <div class="city-chips" id="city-chips">
+        <button class="city-chip active" onclick="selectCity('',this)">Varsayılan</button>
+        <button class="city-chip" onclick="addCity()" style="border-style:dashed">＋ Ekle</button>
+      </div>
+
+      <!-- Ana hero — tıklanınca 5 günlük açılır -->
+      <div id="weather-hero" onclick="openForecast()" style="cursor:pointer">
         <div class="loading-row" style="width:100%"><span class="spin"></span> Yükleniyor…</div>
       </div>
+
+      <!-- 4'lü detay grid -->
       <div class="w-grid" id="w-details" style="display:none">
         <div class="w-cell">
           <div class="w-cell-label">Hissedilen</div>
@@ -363,6 +415,13 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
           <div class="w-cell-label">Rüzgar</div>
           <div class="w-cell-value" id="w-wind">—</div>
         </div>
+        <div class="w-cell">
+          <div class="w-cell-label">Yağmur</div>
+          <div class="w-cell-value" id="w-rain">—</div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:8px">
+        Kartına bas → 5 günlük tahmin
       </div>
     </div>
 
@@ -605,6 +664,19 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
       Galeri
     </button>
   </nav>
+</div>
+
+<!-- Forecast Modal -->
+<div id="forecast-modal" onclick="closeForecastIfBg(event)">
+  <div id="forecast-box">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div class="tx-title" style="margin-bottom:0">5 Günlük Tahmin</div>
+      <button class="refresh-btn" onclick="closeForecastModal()">✕</button>
+    </div>
+    <div id="forecast-content">
+      <div class="loading-row"><span class="spin"></span> Yükleniyor…</div>
+    </div>
+  </div>
 </div>
 
 <!-- Transaction Modal -->
@@ -855,25 +927,122 @@ const OWM_ICONS = {
 };
 function owmIcon(code){ return OWM_ICONS[code.slice(0,2)] || '🌡️'; }
 
+let _weatherCity   = localStorage.getItem('weather_city') || '';
+let _weatherCities = JSON.parse(localStorage.getItem('weather_cities') || '[]');
+
+function renderCityChips(){
+  const box = document.getElementById('city-chips');
+  box.innerHTML = '';
+  const def = document.createElement('button');
+  def.className = 'city-chip' + (_weatherCity===''?' active':'');
+  def.textContent = 'Varsayılan';
+  def.onclick = ()=>selectCity('', def);
+  box.appendChild(def);
+  _weatherCities.forEach(city=>{
+    const chip = document.createElement('button');
+    chip.className = 'city-chip' + (_weatherCity===city?' active':'');
+    chip.innerHTML = `${city} <span class="chip-del" onclick="event.stopPropagation();removeCity('${city}')">✕</span>`;
+    chip.onclick = ()=>selectCity(city, chip);
+    box.appendChild(chip);
+  });
+  const add = document.createElement('button');
+  add.className = 'city-chip';
+  add.style.borderStyle = 'dashed';
+  add.textContent = '＋ Ekle';
+  add.onclick = addCity;
+  box.appendChild(add);
+}
+
+function selectCity(city, btn){
+  _weatherCity = city;
+  localStorage.setItem('weather_city', city);
+  renderCityChips();
+  loadWeather();
+}
+
+function addCity(){
+  const city = prompt('Şehir adı girin (İngilizce önerilir):');
+  if(!city || !city.trim()) return;
+  const c = city.trim();
+  if(!_weatherCities.includes(c)){
+    _weatherCities.push(c);
+    localStorage.setItem('weather_cities', JSON.stringify(_weatherCities));
+  }
+  selectCity(c, null);
+}
+
+function removeCity(city){
+  _weatherCities = _weatherCities.filter(c=>c!==city);
+  localStorage.setItem('weather_cities', JSON.stringify(_weatherCities));
+  if(_weatherCity === city){ _weatherCity = ''; localStorage.setItem('weather_city',''); }
+  renderCityChips();
+  loadWeather();
+}
+
 async function loadWeather(){
   document.getElementById('weather-hero').innerHTML =
     '<div class="loading-row" style="width:100%"><span class="spin"></span> Yükleniyor…</div>';
   document.getElementById('w-details').style.display='none';
   try{
-    const d = await api('/api/weather');
+    const params = _weatherCity ? `?city=${encodeURIComponent(_weatherCity)}` : '';
+    const d = await api('/api/weather'+params);
     document.getElementById('weather-hero').innerHTML = `
       <div class="w-icon">${owmIcon(d.icon)}</div>
-      <div>
+      <div style="flex:1">
         <div class="w-temp">${d.temp}°C</div>
         <div class="w-city">${d.city}</div>
         <div class="w-desc">${d.desc}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:8px">📅 5 günlük tahmin için tıkla</div>
       </div>`;
-    document.getElementById('w-feels').textContent  = d.feels_like+'°C';
-    document.getElementById('w-hum').textContent    = d.humidity+'%';
-    document.getElementById('w-wind').textContent   = d.wind+' km/h';
+    document.getElementById('w-feels').textContent = d.feels_like+'°C';
+    document.getElementById('w-hum').textContent   = d.humidity+'%';
+    document.getElementById('w-wind').textContent  = d.wind+' km/h';
+    document.getElementById('w-rain').textContent  = '%'+(d.rain_pct||0);
     document.getElementById('w-details').style.display='grid';
   } catch(e){ toast('❌ '+e.message); }
 }
+
+async function openForecast(){
+  document.getElementById('forecast-modal').classList.add('open');
+  document.getElementById('forecast-content').innerHTML =
+    '<div class="loading-row"><span class="spin"></span> Yükleniyor…</div>';
+  try{
+    const params = _weatherCity ? `?city=${encodeURIComponent(_weatherCity)}` : '';
+    const days = await api('/api/weather/forecast'+params);
+    const DAYS = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
+    const today = new Date();
+    document.getElementById('forecast-content').innerHTML = days.map(day=>{
+      const d = new Date(day.date);
+      const isToday = d.toDateString()===today.toDateString();
+      const isTomorrow = d.toDateString()===new Date(today.getTime()+86400000).toDateString();
+      const dayName = isToday?'Bugün':isTomorrow?'Yarın':DAYS[d.getDay()];
+      const m = day.morning, e = day.evening;
+      return `<div class="forecast-row">
+        <div class="forecast-day">${dayName}</div>
+        <div class="forecast-icon">${owmIcon(day.icon)}</div>
+        <div>
+          <div class="forecast-temps">${day.min_temp}° / ${day.max_temp}°</div>
+          <div class="forecast-rain">💧 %${day.rain_pct}</div>
+        </div>
+        <div class="forecast-time">
+          <div class="forecast-time-label">Sabah</div>
+          <div class="forecast-time-icon">${m?owmIcon(m.icon):'—'}</div>
+          <div class="forecast-time-temp">${m?m.temp+'°':'—'}</div>
+        </div>
+        <div class="forecast-time">
+          <div class="forecast-time-label">Akşam</div>
+          <div class="forecast-time-icon">${e?owmIcon(e.icon):'—'}</div>
+          <div class="forecast-time-temp">${e?e.temp+'°':'—'}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e){
+    document.getElementById('forecast-content').innerHTML =
+      `<div class="empty-msg">❌ ${e.message}</div>`;
+  }
+}
+function closeForecastModal(){ document.getElementById('forecast-modal').classList.remove('open'); }
+function closeForecastIfBg(e){ if(e.target===document.getElementById('forecast-modal')) closeForecastModal(); }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // REMINDERS

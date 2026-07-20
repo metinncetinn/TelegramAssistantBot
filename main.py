@@ -459,19 +459,43 @@ def generate_image(req: ImageReq):
                 height = int(parts[1])
             except: pass
 
-        # Pollinations.ai — ücretsiz, API key gerektirmez
+        GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+
+        # Google Gemini (Nano Banana) — kart gerektirmez, günlük ücretsiz kota
+        if GEMINI_API_KEY:
+            r = requests.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={GEMINI_API_KEY}',
+                headers={'Content-Type': 'application/json'},
+                json={
+                    'contents': [{'parts': [{'text': req.prompt}]}],
+                },
+                timeout=60
+            )
+            if r.ok:
+                data = r.json()
+                try:
+                    parts = data['candidates'][0]['content']['parts']
+                    for p in parts:
+                        if 'inlineData' in p:
+                            return {'ok': True, 'image': p['inlineData']['data']}
+                    raise HTTPException(500, 'Gemini resim döndürmedi')
+                except (KeyError, IndexError):
+                    raise HTTPException(500, f'Gemini yanıt hatası: {str(data)[:200]}')
+            else:
+                # Gemini başarısız olursa Pollinations'a düş
+                pass
+
+        # Fallback: Pollinations.ai (API key gerektirmez)
         import urllib.parse
-        encoded_prompt = urllib.parse.quote(req.prompt)
-        url = f'https://image.pollinations.ai/prompt/{encoded_prompt}?width={width}&height={height}&nologo=true&enhance=true'
-
-        r = requests.get(url, timeout=120)
-        r.raise_for_status()
-
-        if not r.content or len(r.content) < 100:
+        encoded = urllib.parse.quote(req.prompt)
+        url = f'https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&nologo=true&enhance=true'
+        r2 = requests.get(url, timeout=120)
+        r2.raise_for_status()
+        if not r2.content or len(r2.content) < 100:
             raise HTTPException(500, 'Boş yanıt döndü')
-
         import base64
-        return {'ok': True, 'image': base64.b64encode(r.content).decode()}
+        return {'ok': True, 'image': base64.b64encode(r2.content).decode()}
+
     except HTTPException: raise
     except Exception as e: raise HTTPException(500, str(e))
 
