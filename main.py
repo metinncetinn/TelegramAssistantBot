@@ -16,6 +16,7 @@ app = FastAPI(title="Pi Dashboard API", version="2.0.0")
 
 BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE      = os.path.join(BASE_DIR, 'wallet.json')
+FUNDS_FILE     = os.path.join(BASE_DIR, 'funds.json')
 REMINDERS_FILE = os.path.join(BASE_DIR, 'reminders.json')
 
 OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY', '')
@@ -137,6 +138,7 @@ class Cache:
 rate_cache    = Cache(ttl_seconds=300)
 weather_cache = Cache(ttl_seconds=600)
 gallery_cache = Cache(ttl_seconds=30)
+funds_cache   = Cache(ttl_seconds=900)  # 15 dakika — TEFAS günde 1 kez güncellenir
 
 def get_rates(use_cache=True):
     if use_cache:
@@ -252,6 +254,133 @@ def portfolio_remove(req: TxRequest):
         w[req.key]['amount'] -= req.amount
         w[req.key]['cost']   -= float(w[req.key]['cost']) * ratio
         save_json(DATA_FILE, w)
+        return {'ok': True}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, f'Çıkarma hatası: {str(e)}')
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — YATIRIM FONLARI (TEFAS)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def load_funds():
+    return load_json(FUNDS_FILE, {})
+
+def get_tefas_prices():
+    """TEFAS'tan tüm fonların güncel fiyatlarını çeker (15dk cache).
+    Hafta sonu/tatilde veri yoksa geriye doğru 5 güne kadar dener."""
+    cached = funds_cache.get('prices')
+    if cached:
+        return cached
+    try:
+        from pytefas import Crawler
+    except ImportError:
+        raise HTTPException(500, 'pytefas kurulu değil — pip install pytefas --break-system-packages')
+
+    tefas = Crawler()
+    for i in range(6):
+        day = (datetime.datetime.now(TZ) - datetime.timedelta(days=i)).strftime('%Y-%m-%d')
+        try:
+            df = tefas.fetch_many(day, columns='info')
+            if df is not None and len(df) > 0:
+                prices = {}
+                for _, row in df.iterrows():
+                    prices[row['fund_code']] = {
+                        'name': row['fund_name'],
+                        'price': float(row['price']),
+                        'date': day,
+                    }
+                funds_cache.set('prices', prices)
+                return prices
+        except Exception:
+            continue
+    raise HTTPException(502, 'TEFAS verisi alınamadı')
+
+
+@app.get('/api/funds')
+def funds_list():
+    funds  = load_funds()
+    prices = get_tefas_prices()
+    items = []
+    total_value = total_cost = 0.0
+    for code, e in funds.items():
+        amt, cost = e.get('amount', 0), e.get('cost', 0)
+        if amt <= 0: continue
+        info  = prices.get(code)
+        price = info['price'] if info else 0
+        name  = info['name']  if info else code
+        value = amt * price
+        pnl   = value - cost
+        total_value += value; total_cost += cost
+        items.append({
+            'code': code, 'name': name,
+            'amount': amt, 'price': price,
+            'avg_cost': (cost / amt) if amt else 0,
+            'value': value, 'cost': cost,
+            'pnl': pnl, 'pnl_pct': (pnl / cost * 100) if cost else 0,
+        })
+    total_pnl = total_value - total_cost
+    return {
+        'items': items,
+        'total_value': total_value, 'total_cost': total_cost,
+        'total_pnl': total_pnl,
+        'total_pnl_pct': (total_pnl / total_cost * 100) if total_cost else 0,
+    }
+
+
+class FundTxRequest(BaseModel):
+    code: str
+    amount: float
+
+    @field_validator('code')
+    @classmethod
+    def validate_code(cls, v):
+        v = v.strip().upper()
+        if not v: raise ValueError('Fon kodu boş olamaz')
+        return v
+
+    @field_validator('amount')
+    @classmethod
+    def validate_amount(cls, v):
+        if v <= 0: raise ValueError('Miktar 0\'dan büyük olmalı')
+        return v
+
+
+@app.post('/api/funds/add')
+def funds_add(req: FundTxRequest):
+    try:
+        prices = get_tefas_prices()
+        info = prices.get(req.code)
+        if not info:
+            raise HTTPException(404, f'Fon kodu bulunamadı: {req.code}')
+        price = info['price']
+        cost  = req.amount * price
+
+        funds = load_funds()
+        if req.code not in funds:
+            funds[req.code] = {'amount': 0.0, 'cost': 0.0}
+        funds[req.code]['amount'] += req.amount
+        funds[req.code]['cost']   += cost
+        save_json(FUNDS_FILE, funds)
+
+        return {'ok': True, 'price': round(price, 4), 'cost': round(cost, 2), 'name': info['name']}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, f'Ekleme hatası: {str(e)}')
+
+
+@app.post('/api/funds/remove')
+def funds_remove(req: FundTxRequest):
+    try:
+        funds = load_funds()
+        if req.code not in funds:
+            raise HTTPException(404, 'Bu fon portföyünüzde yok')
+        cur = float(funds[req.code]['amount'])
+        if cur < req.amount: raise HTTPException(400, f'Yetersiz adet: {cur:.4f}')
+        if cur == 0: raise HTTPException(400, 'Adet sıfır')
+        ratio = req.amount / cur
+        funds[req.code]['amount'] -= req.amount
+        funds[req.code]['cost']   -= float(funds[req.code]['cost']) * ratio
+        save_json(FUNDS_FILE, funds)
         return {'ok': True}
     except HTTPException: raise
     except Exception as e: raise HTTPException(500, f'Çıkarma hatası: {str(e)}')

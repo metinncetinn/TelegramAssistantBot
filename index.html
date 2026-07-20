@@ -105,6 +105,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--m
   background:rgba(0,0,0,.85);align-items:flex-end;
 }
 #tx-modal.open{display:flex}
+#fund-tx-modal{
+  display:none;position:fixed;inset:0;z-index:200;
+  background:rgba(0,0,0,.85);align-items:flex-end;
+}
+#fund-tx-modal.open{display:flex}
 #tx-box{
   width:100%;background:var(--surface);border-radius:16px 16px 0 0;
   border-top:1px solid var(--border);padding:20px 16px calc(24px + var(--safe-bot));
@@ -381,6 +386,26 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
       </div>
 
       <button class="btn btn-accent" onclick="openTx()" style="margin-top:8px">＋ İşlem Yap</button>
+
+      <!-- Yatırım Fonları -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:24px;margin-bottom:10px">
+        <div class="page-title" style="margin-bottom:0">Yatırım Fonları</div>
+        <button class="refresh-btn" onclick="loadFunds()">↻ Güncelle</button>
+      </div>
+
+      <div id="funds-total-block" style="display:none;margin-bottom:12px">
+        <div id="total-funds-block">
+          <div class="total-label">Fon Toplam Değeri</div>
+          <div class="total-value" id="funds-total-value" style="font-size:22px">—</div>
+          <div class="total-pnl" id="funds-total-pnl">—</div>
+        </div>
+      </div>
+
+      <div class="card" id="funds-list">
+        <div class="loading-row"><span class="spin"></span> Yükleniyor…</div>
+      </div>
+
+      <button class="btn btn-ghost" onclick="openFundTx()" style="margin-top:8px">＋ Fon Ekle/Çıkar</button>
     </div>
 
     <!-- ── WEATHER PAGE ── -->
@@ -709,6 +734,27 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
   </div>
 </div>
 
+<!-- Fund Transaction Modal -->
+<div id="fund-tx-modal" onclick="closeFundTxIfBg(event)">
+  <div id="tx-box">
+    <div class="tx-title">Fon İşlemi</div>
+    <div class="tx-tabs">
+      <button class="tx-tab active" onclick="setFundTxMode('add',this)">＋ Ekle</button>
+      <button class="tx-tab" onclick="setFundTxMode('remove',this)">－ Çıkar</button>
+    </div>
+    <div class="field">
+      <label>Fon Kodu</label>
+      <input type="text" id="fund-tx-code" placeholder="Örn: AAK, YAC, TTE" style="text-transform:uppercase"/>
+    </div>
+    <div class="field">
+      <label>Adet</label>
+      <input type="number" id="fund-tx-amount" placeholder="0.0000" min="0" step="any"/>
+    </div>
+    <button class="btn btn-accent" id="fund-tx-submit" onclick="submitFundTx()">Ekle</button>
+    <button class="btn btn-ghost" onclick="closeFundTx()">İptal</button>
+  </div>
+</div>
+
 <!-- Gallery Lightbox -->
 <div id="gallery-modal" onclick="closeGalleryIfBg(event)">
   <div id="gallery-modal-content">
@@ -914,6 +960,87 @@ async function submitTx(){
       : '✓ Çıkarıldı';
     toast(msg, 3000);
     closeTx(); loadPortfolio();
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// YATIRIM FONLARI (TEFAS)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function loadFunds(){
+  const box = document.getElementById('funds-list');
+  box.innerHTML = '<div class="loading-row"><span class="spin"></span> Yükleniyor…</div>';
+  try{
+    const d = await api('/api/funds');
+
+    if(!d.items.length){
+      document.getElementById('funds-total-block').style.display = 'none';
+      box.innerHTML = '<div class="empty-msg">Henüz fon eklenmemiş.<br/>Fon Ekle/Çıkar butonuyla ekleyin.</div>';
+      return;
+    }
+
+    // Toplam blok
+    const pnl = d.total_pnl, pct = d.total_pnl_pct;
+    const cls = pnl>=0?'pnl-pos':'pnl-neg';
+    const sign = pnl>=0?'▲':'▼';
+    document.getElementById('funds-total-value').textContent = fmt(d.total_value)+' TL';
+    document.getElementById('funds-total-pnl').innerHTML =
+      `<span class="${cls}">${sign} ${fmt(Math.abs(pnl))} TL (${pct>=0?'+':''}${pct.toFixed(2)}%)</span>` +
+      `&nbsp;&nbsp;<span style="color:var(--muted);font-size:11px">Maliyet: ${fmt(d.total_cost)} TL</span>`;
+    document.getElementById('funds-total-block').style.display = 'block';
+
+    // Liste
+    box.innerHTML = d.items.map((it,i)=>{
+      const pc = it.pnl>=0, sign2=pc?'▲':'▼', cls2=pc?'pnl-pos':'pnl-neg';
+      const isLast = i === d.items.length-1;
+      return `<div class="asset-row" style="${isLast?'border-bottom:none':''}">
+        <div>
+          <div class="asset-name">${it.code} <span style="color:var(--muted);font-weight:400;font-size:10px">${it.name}</span></div>
+          <div class="asset-amount">${it.amount.toFixed(4)} adet</div>
+          <div class="asset-meta">Ort: ${fmt(it.avg_cost)} TL · Satış: ${fmt(it.price)} TL</div>
+        </div>
+        <div class="asset-right">
+          <div class="asset-value">${fmt(it.value)} TL</div>
+          <div class="asset-pnl ${cls2}">${sign2} ${fmt(Math.abs(it.pnl))} (${it.pnl_pct>=0?'+':''}${it.pnl_pct.toFixed(2)}%)</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e){
+    box.innerHTML = `<div class="empty-msg">❌ ${e.message}</div>`;
+  }
+}
+
+let fundTxMode = 'add';
+function openFundTx(){ document.getElementById('fund-tx-modal').classList.add('open'); }
+function closeFundTx(){
+  document.getElementById('fund-tx-modal').classList.remove('open');
+  document.getElementById('fund-tx-amount').value='';
+  document.getElementById('fund-tx-code').value='';
+}
+function closeFundTxIfBg(e){ if(e.target===document.getElementById('fund-tx-modal')) closeFundTx(); }
+function setFundTxMode(m, btn){
+  fundTxMode = m;
+  const tabs = btn.parentElement.querySelectorAll('.tx-tab');
+  tabs.forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('fund-tx-submit').textContent = m==='add'?'Ekle':'Çıkar';
+  document.getElementById('fund-tx-submit').className = 'btn '+(m==='add'?'btn-accent':'btn-red');
+}
+async function submitFundTx(){
+  const code   = document.getElementById('fund-tx-code').value.trim().toUpperCase();
+  const amount = parseFloat(document.getElementById('fund-tx-amount').value);
+  if(!code){ toast('Fon kodu girin'); return; }
+  if(!amount||amount<=0){ toast('Geçerli bir adet girin'); return; }
+  try{
+    const d = await api('/api/funds/'+fundTxMode, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({code, amount})
+    });
+    const msg = fundTxMode==='add'
+      ? `✓ ${d.name} eklendi — Fiyat: ${fmt(d.price)} TL · Ödenen: ${fmt(d.cost)} TL`
+      : '✓ Çıkarıldı';
+    toast(msg, 3500);
+    closeFundTx(); loadFunds();
   } catch(e){ toast('❌ '+e.message); }
 }
 
@@ -1558,6 +1685,7 @@ async function toggleNotification(){
 
 loadPortfolio();
 setInterval(loadPortfolio, 3*60*1000);
+loadFunds();
 renderCityChips();
 renderImgHistory();
 
