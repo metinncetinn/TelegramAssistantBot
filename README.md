@@ -31,7 +31,7 @@
 
 ### 1. Repo'yu clone edin
 ```bash
-git clone <repository-url> ~/pi-dashboard
+git clone https://github.com/metinncetinn/TelegramAssistantBot ~/pi-dashboard
 cd ~/pi-dashboard
 ```
 
