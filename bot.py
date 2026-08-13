@@ -120,7 +120,7 @@ def get_current_rates():
         if currency_resp.status_code == 200:
             for item in currency_resp.json():
                 kod   = item.get('Kod', '').upper()
-                satis = item.get('Satis', '0')
+                satis = item.get('Alis', '0')
                 if   kod == 'USD': rates['usd'] = parse_turkish_number(satis)
                 elif kod == 'EUR': rates['eur'] = parse_turkish_number(satis)
                 elif kod == 'GBP': rates['gbp'] = parse_turkish_number(satis)
