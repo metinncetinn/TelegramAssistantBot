@@ -134,7 +134,7 @@ def get_current_rates():
         if gold_resp.status_code == 200:
             for item in gold_resp.json():
                 kod   = item.get('Kod', '').upper()
-                satis = item.get('Satis', '0')
+                satis = item.get('Alis', '0')
                 # ── YENİ KODLAR ──────────────────────────
                 if   kod == 'PGA': rates['gram']   = parse_turkish_number(satis)
                 elif kod == 'PC':  rates['ceyrek'] = parse_turkish_number(satis)
