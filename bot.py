@@ -120,11 +120,11 @@ def get_current_rates():
         if currency_resp.status_code == 200:
             for item in currency_resp.json():
                 kod   = item.get('Kod', '').upper()
-                satis = item.get('Alis', '0')
-                if   kod == 'USD': rates['usd'] = parse_turkish_number(satis)
-                elif kod == 'EUR': rates['eur'] = parse_turkish_number(satis)
-                elif kod == 'GBP': rates['gbp'] = parse_turkish_number(satis)
-                elif kod == 'JPY': rates['jpy'] = parse_turkish_number(satis)
+                alis = item.get('Alis', '0')
+                if   kod == 'USD': rates['usd'] = parse_turkish_number(alis)
+                elif kod == 'EUR': rates['eur'] = parse_turkish_number(alis)
+                elif kod == 'GBP': rates['gbp'] = parse_turkish_number(alis)
+                elif kod == 'JPY': rates['jpy'] = parse_turkish_number(alis)
             print(f"✅ Para birimleri alındı: {list(rates.keys())}")
         else:
             print(f"❌ Para birimi API hatası: {currency_resp.status_code}")
@@ -134,12 +134,12 @@ def get_current_rates():
         if gold_resp.status_code == 200:
             for item in gold_resp.json():
                 kod   = item.get('Kod', '').upper()
-                satis = item.get('Alis', '0')
+                alis = item.get('Alis', '0')
                 # ── YENİ KODLAR ──────────────────────────
-                if   kod == 'PGA': rates['gram']   = parse_turkish_number(satis)
-                elif kod == 'PC':  rates['ceyrek'] = parse_turkish_number(satis)
-                elif kod == 'PY':  rates['yarim']  = parse_turkish_number(satis)
-                elif kod == 'PT':  rates['tam']    = parse_turkish_number(satis)
+                if   kod == 'PGA': rates['gram']   = parse_turkish_number(alis)
+                elif kod == 'PC':  rates['ceyrek'] = parse_turkish_number(alis)
+                elif kod == 'PY':  rates['yarim']  = parse_turkish_number(alis)
+                elif kod == 'PT':  rates['tam']    = parse_turkish_number(alis)
             print(f"✅ Altın fiyatları alındı: gram={rates.get('gram', 0):.2f}")
         else:
             print(f"❌ Altın API hatası: {gold_resp.status_code}")
