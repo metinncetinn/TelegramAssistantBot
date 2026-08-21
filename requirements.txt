@@ -13,3 +13,4 @@ pillow-heif
 face_recognition
 python-multipart
 setuptools<81
+pytefas
