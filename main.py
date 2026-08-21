@@ -908,6 +908,30 @@ def _recompute_person_centroid(db, pid):
     if db['people'][pid].get('cover_face_id') not in valid_ids:
         db['people'][pid]['cover_face_id'] = valid_ids[0] if valid_ids else None
 
+def _remove_photo_faces(db, gid):
+    affected = set()
+    for fid, face in list(db['faces'].items()):
+        if face.get('photo_id') != gid:
+            continue
+        if face.get('person_id'):
+            affected.add(face['person_id'])
+        db['faces'].pop(fid, None)
+    for pid in affected:
+        if pid in db['people']:
+            _recompute_person_centroid(db, pid)
+
+def _cleanup_faces_db(db, active_gids):
+    """Galeriden silinen dosyaların yüz ve işlenme kayıtlarını temizler."""
+    changed = False
+    for gid in list(db['processed']):
+        if gid not in active_gids:
+            db['processed'].pop(gid, None)
+            changed = True
+    for gid in {f.get('photo_id') for f in db['faces'].values()} - active_gids:
+        _remove_photo_faces(db, gid)
+        changed = True
+    return changed
+
 def process_new_faces(limit=FACE_BATCH_SIZE):
     """Galerideki henüz taranmamış fotoğrafları yüz tanımadan geçirir.
     En yeni fotoğraflar önce işlenir, böylece az önce yüklenen fotoğraflar
@@ -915,13 +939,18 @@ def process_new_faces(limit=FACE_BATCH_SIZE):
     try:
         import face_recognition
     except ImportError:
-        return 0  # kütüphane kurulu değilse sessizce çık, servis çalışmaya devam etsin
+        print('⚠ Yüz taraması devre dışı: face_recognition kurulu değil')
+        return 0
 
     data  = scan_gallery()
     items = [it for it in data['items'] if it['type'] == 'image']
 
+    active_gids = {it['id'] for it in items}
     with faces_lock:
         db = load_faces_db()
+        changed = _cleanup_faces_db(db, active_gids)
+        if changed:
+            save_faces_db(db)
 
     processed_count = 0
     for it in items:
@@ -929,7 +958,7 @@ def process_new_faces(limit=FACE_BATCH_SIZE):
             break
         gid = it['id']
         rec = db['processed'].get(gid)
-        if rec and rec.get('mtime') == it['mtime']:
+        if rec and rec.get('mtime') == it['mtime'] and rec.get('size') == it['size']:
             continue
 
         full = os.path.join(GALLERY_DIR, it['rel'])
@@ -940,6 +969,8 @@ def process_new_faces(limit=FACE_BATCH_SIZE):
             encodings = face_recognition.face_encodings(arr, known_face_locations=locations)
 
             with faces_lock:
+                db = load_faces_db()
+                _remove_photo_faces(db, gid)
                 for loc, enc in zip(locations, encodings):
                     enc_list = enc.tolist()
                     pid, _ = _find_best_person(enc_list, db['people'])
@@ -964,16 +995,15 @@ def process_new_faces(limit=FACE_BATCH_SIZE):
                     if not db['people'][pid]['cover_face_id']:
                         db['people'][pid]['cover_face_id'] = face_id
                     face_ids.append(face_id)
+                db['processed'][gid] = {
+                    'mtime': it['mtime'], 'size': it['size'], 'faces': face_ids,
+                }
+                save_faces_db(db)
+            processed_count += 1
         except Exception as e:
-            print(f"Yüz tanıma hatası ({it['name']}): {e}")
-
-        with faces_lock:
-            db['processed'][gid] = {'mtime': it['mtime'], 'faces': face_ids}
-        processed_count += 1
+            print(f"Yüz tanıma hatası ({it['name']}): {e}; tekrar denenecek")
 
     if processed_count > 0:
-        with faces_lock:
-            save_faces_db(db)
         print(f"✓ Yüz taraması: {processed_count} fotoğraf işlendi")
 
     return processed_count
@@ -994,14 +1024,27 @@ threading.Thread(target=_face_scan_thread, daemon=True).start()
 def faces_status():
     data = scan_gallery()
     total_images = len([it for it in data['items'] if it['type'] == 'image'])
+    try:
+        import face_recognition  # noqa: F401
+        enabled = True
+    except ImportError:
+        enabled = False
     with faces_lock:
         db = load_faces_db()
-    processed = len(db['processed'])
+        image_index = {it['id']: it for it in data['items'] if it['type'] == 'image'}
+        _cleanup_faces_db(db, set(image_index))
+        processed = sum(
+            1 for gid, rec in db['processed'].items()
+            if gid in image_index
+            and rec.get('mtime') == image_index[gid]['mtime']
+            and rec.get('size') == image_index[gid]['size']
+        )
     return {
         'total_images': total_images,
         'processed': processed,
         'pending': max(0, total_images - processed),
         'people_count': len([p for p in db['people'].values() if p.get('count', 0) > 0]),
+        'enabled': enabled,
     }
 
 
@@ -1146,6 +1189,9 @@ def faces_reassign(req: FaceReassignReq):
         raise HTTPException(400, 'Yüz seçilmedi')
     with faces_lock:
         db = load_faces_db()
+        face_ids = list(dict.fromkeys(fid for fid in req.face_ids if fid in db['faces']))
+        if not face_ids:
+            raise HTTPException(404, 'Geçerli yüz bulunamadı')
 
         target_pid = req.person_id.strip()
         if not target_pid:
@@ -1156,9 +1202,8 @@ def faces_reassign(req: FaceReassignReq):
             raise HTTPException(404, 'Hedef kişi bulunamadı')
 
         affected_pids = {target_pid}
-        for fid in req.face_ids:
-            f = db['faces'].get(fid)
-            if not f: continue
+        for fid in face_ids:
+            f = db['faces'][fid]
             old_pid = f.get('person_id')
             if old_pid: affected_pids.add(old_pid)
             f['person_id'] = target_pid

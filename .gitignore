@@ -11,6 +11,8 @@ wallet_data.json
 reminders.json
 price_history.json
 funds.json
+faces.json
+face_thumbs/
 
 # Python
 __pycache__/

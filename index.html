@@ -301,6 +301,21 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
   position:absolute;bottom:4px;right:4px;background:rgba(0,0,0,.65);
   color:#fff;font-size:10px;padding:2px 5px;border-radius:3px;line-height:1.2;
 }
+.people-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px;margin-bottom:12px}
+.person-card{display:flex;flex-direction:column;align-items:center;gap:6px;padding:9px 5px;
+  background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);
+  font-family:var(--mono);cursor:pointer;min-width:0}
+.person-card:hover,.person-card.active{border-color:var(--accent)}
+.person-avatar{width:58px;height:58px;border-radius:50%;overflow:hidden;background:var(--surface2);border:2px solid var(--border2)}
+.person-card.active .person-avatar{border-color:var(--accent)}
+.person-avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.person-name{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
+.person-count{font-size:9px;color:var(--muted)}
+.photo-faces{width:100%;max-width:420px;margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
+.photo-face-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.photo-face-row img{width:38px;height:38px;border-radius:50%;object-fit:cover;background:var(--surface2);border:1px solid var(--border2)}
+.photo-face-row select{flex:1;min-width:0;background:var(--surface2);border:1px solid var(--border2);border-radius:4px;
+  color:var(--text);font-family:var(--mono);font-size:11px;padding:7px}
 
 /* lightbox */
 #gallery-modal{
@@ -640,6 +655,7 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
 
       <!-- Kişi filtresi -->
       <div class="city-chips" id="people-chips" style="display:none"></div>
+      <div class="people-cards" id="people-cards" style="display:none"></div>
 
       <!-- Aktif kişi filtresi barı -->
       <div id="person-filter-bar" style="display:none;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -778,6 +794,10 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
     <div id="gallery-media-wrap"></div>
     <button class="gm-nav gm-next" onclick="navGallery(1)">›</button>
     <div class="gm-info" id="gallery-modal-info"></div>
+    <div class="photo-faces" id="photo-faces-panel" style="display:none">
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase">Fotoğraftaki yüzler</div>
+      <div id="photo-faces-list"></div>
+    </div>
     <div class="gm-actions">
       <button class="btn btn-accent" onclick="downloadGalleryItem()">↓ İndir</button>
       <button class="btn btn-red" onclick="deleteGalleryItem()">🗑 Sil</button>
@@ -1430,6 +1450,10 @@ function fmtBytes(n){
   return n+' B';
 }
 
+function escapeHtml(value){
+  return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
 async function loadGalleryStorage(){
   const box = document.getElementById('gallery-storage');
   try{
@@ -1449,13 +1473,16 @@ async function loadGalleryStorage(){
 async function loadFacesPanel(){
   const status = document.getElementById('faces-status');
   const chips = document.getElementById('people-chips');
+  const cards = document.getElementById('people-cards');
   try{
     const [state, data] = await Promise.all([
       api('/api/faces/status'),
       api('/api/faces/people')
     ]);
     status.style.display = 'block';
-    status.textContent = state.pending > 0
+    status.textContent = !state.enabled
+      ? 'Yüz tanıma kütüphanesi kurulu değil'
+      : state.pending > 0
       ? `Yüz taraması: ${state.processed}/${state.total_images} fotoğraf · ${state.pending} bekliyor`
       : `Yüz taraması hazır · ${state.people_count} kişi bulundu`;
     chips.innerHTML = [
@@ -1465,11 +1492,19 @@ async function loadFacesPanel(){
         `${person.name} <span style="color:var(--dim)">(${person.count})</span></button>`
       )
     ].join('');
-    chips.style.display = data.people.length ? 'flex' : 'none';
+    chips.style.display = 'none';
+    cards.innerHTML = data.people.map(person => `
+      <button class="person-card ${selectedPerson?.id === person.id ? 'active' : ''}" onclick="selectPerson('${person.id}')">
+        <span class="person-avatar"><img src="/api/faces/thumb/${person.cover_face_id}" loading="lazy" alt=""/></span>
+        <span class="person-name" title="${escapeHtml(person.name)}">${escapeHtml(person.name)}</span>
+        <span class="person-count">${person.count} yüz</span>
+      </button>`).join('');
+    cards.style.display = data.people.length ? 'grid' : 'none';
   } catch(e){
     status.style.display = 'block';
     status.textContent = 'Yüz tanıma hazır değil';
     chips.style.display = 'none';
+    cards.style.display = 'none';
   }
 }
 
@@ -1642,10 +1677,12 @@ function openGalleryModal(i){
   galleryIndex = i;
   renderGalleryModal();
   document.getElementById('gallery-modal').classList.add('open');
+  loadPhotoFaces();
 }
 function closeGalleryModal(){
   document.getElementById('gallery-modal').classList.remove('open');
   document.getElementById('gallery-media-wrap').innerHTML = '';
+  document.getElementById('photo-faces-panel').style.display = 'none';
 }
 function closeGalleryIfBg(e){
   if(e.target === document.getElementById('gallery-modal')) closeGalleryModal();
@@ -1663,11 +1700,72 @@ function renderGalleryModal(){
   document.querySelector('.gm-prev').style.visibility = galleryIndex > 0 ? 'visible' : 'hidden';
   document.querySelector('.gm-next').style.visibility = galleryIndex < galleryItems.length-1 ? 'visible' : 'hidden';
 }
+
+async function loadPhotoFaces(){
+  const panel = document.getElementById('photo-faces-panel');
+  const list = document.getElementById('photo-faces-list');
+  const item = galleryItems[galleryIndex];
+  if(!item || item.type !== 'image'){
+    panel.style.display = 'none';
+    return;
+  }
+  try{
+    const [faceData, peopleData] = await Promise.all([
+      api(`/api/faces/photo/${encodeURIComponent(item.id)}`),
+      api('/api/faces/people')
+    ]);
+    if(!faceData.faces.length){
+      panel.style.display = 'none';
+      return;
+    }
+    const options = peopleData.people.map(person =>
+      `<option value="${person.id}">${escapeHtml(person.name)}</option>`).join('');
+    list.innerHTML = faceData.faces.map(face => `
+      <div class="photo-face-row">
+        <img src="/api/faces/thumb/${face.face_id}" loading="lazy" alt=""/>
+        <select onchange="reassignFace('${face.face_id}', this.value)">
+          <option value="">${escapeHtml(face.person_name)}</option>
+          ${options}
+          <option value="__new__">+ Yeni kişi oluştur</option>
+        </select>
+      </div>`).join('');
+    list.querySelectorAll('select').forEach((select, index) => {
+      select.value = faceData.faces[index].person_id || '';
+    });
+    panel.style.display = 'block';
+  } catch(e){
+    panel.style.display = 'none';
+  }
+}
+
+async function reassignFace(faceId, personId){
+  if(!personId) return;
+  let body = {face_ids:[faceId], person_id:personId};
+  if(personId === '__new__'){
+    const name = prompt('Yeni kişi adı:');
+    if(!name || !name.trim()) return loadPhotoFaces();
+    body = {face_ids:[faceId], new_name:name.trim()};
+  }
+  try{
+    await api('/api/faces/reassign', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)
+    });
+    await loadFacesPanel();
+    await loadPhotoFaces();
+    if(selectedPerson) selectPerson(selectedPerson.id);
+    toast('✓ Yüz kişiyle eşleştirildi');
+  } catch(e){
+    toast('❌ '+e.message);
+    loadPhotoFaces();
+  }
+}
 function navGallery(dir){
   const ni = galleryIndex + dir;
   if(ni < 0 || ni >= galleryItems.length) return;
   galleryIndex = ni;
   renderGalleryModal();
+  loadPhotoFaces();
 }
 function downloadGalleryItem(){
   const it = galleryItems[galleryIndex];
