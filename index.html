@@ -325,7 +325,8 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
 #gallery-modal.open{display:flex}
 #gallery-modal-content{
   position:relative;width:100%;height:100%;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
+  overflow-y:auto;-webkit-overflow-scrolling:touch;
   padding:calc(var(--safe-top) + 16px) 16px calc(var(--safe-bot) + 16px);
 }
 #gallery-media-wrap{
