@@ -626,6 +626,7 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
         <div style="display:flex;gap:8px">
           <button class="refresh-btn" onclick="openUpload()">↑ Yükle</button>
           <button class="refresh-btn" id="gallery-refresh-button" onclick="refreshGallery()">↻ Güncelle</button>
+          <button class="refresh-btn" id="faces-rescan-all-button" onclick="rescanAllFaces()">↻ Tümünü tara</button>
         </div>
       </div>
       <div id="gallery-refresh-status" style="font-size:10px;color:var(--muted);margin:-8px 0 10px"></div>
@@ -1456,6 +1457,7 @@ let galleryItems  = [];
 let galleryHasMore = false;
 let galleryIndex  = -1;
 let selectedPerson = null;
+let faceRescanTimer = null;
 
 function fmtBytes(n){
   if(n >= 1024**3) return (n/1024**3).toFixed(2)+' GB';
@@ -1498,9 +1500,21 @@ async function loadFacesPanel(){
     status.style.display = 'block';
     status.textContent = !state.enabled
       ? 'Yüz tanıma kütüphanesi kurulu değil'
+      : state.rescan_active
+      ? `Dikkatli tarama: ${state.rescan_processed}/${state.rescan_total} fotoğraf işlendi`
+      : state.rescan_error
+      ? `Toplu tarama hatası: ${state.rescan_error}`
       : state.pending > 0
       ? `Yüz taraması: ${state.processed}/${state.total_images} fotoğraf · ${state.pending} tarama sırasında sırada`
       : `Yüz taraması hazır · ${state.people_count} kişi bulundu`;
+    const rescanButton = document.getElementById('faces-rescan-all-button');
+    if(rescanButton) rescanButton.disabled = state.rescan_active;
+    if(state.rescan_active && !faceRescanTimer){
+      faceRescanTimer = setInterval(loadFacesPanel, 5000);
+    } else if(!state.rescan_active && faceRescanTimer){
+      clearInterval(faceRescanTimer);
+      faceRescanTimer = null;
+    }
     chips.innerHTML = [
       `<button class="city-chip ${selectedPerson ? '' : 'active'}" onclick="clearPersonFilter()">Tümü</button>`,
       ...data.people.map(person =>
@@ -1522,6 +1536,8 @@ async function loadFacesPanel(){
     status.textContent = 'Yüz tanıma hazır değil';
     chips.style.display = 'none';
     cards.style.display = 'none';
+    const rescanButton = document.getElementById('faces-rescan-all-button');
+    if(rescanButton) rescanButton.disabled = false;
     return false;
   }
 }
@@ -1868,6 +1884,18 @@ async function rescanGalleryItem(){
     if(selectedPerson) selectPerson(selectedPerson.id);
     toast('✓ Fotoğraf yeniden tarandı');
   } catch(e){
+    toast('❌ '+e.message);
+  }
+}
+async function rescanAllFaces(){
+  const button = document.getElementById('faces-rescan-all-button');
+  if(button) button.disabled = true;
+  try{
+    const result = await api('/api/faces/rescan-all', {method:'POST'});
+    toast(`↻ ${result.total} fotoğraf dikkatli tarama sırasına alındı`);
+    await loadFacesPanel();
+  } catch(e){
+    if(button) button.disabled = false;
     toast('❌ '+e.message);
   }
 }
