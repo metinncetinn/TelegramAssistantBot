@@ -672,6 +672,7 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
         <button class="tx-tab active" data-filter="all" onclick="setGalleryFilter('all',this)">Tümü</button>
         <button class="tx-tab" data-filter="image" onclick="setGalleryFilter('image',this)">Fotoğraf</button>
         <button class="tx-tab" data-filter="video" onclick="setGalleryFilter('video',this)">Video</button>
+        <button class="tx-tab" data-filter="unmatched" onclick="setGalleryFilter('unmatched',this)">Eşleşmeyen</button>
       </div>
 
       <!-- Sort -->
@@ -1495,7 +1496,7 @@ async function loadFacesPanel(){
     status.textContent = !state.enabled
       ? 'Yüz tanıma kütüphanesi kurulu değil'
       : state.pending > 0
-      ? `Yüz taraması: ${state.processed}/${state.total_images} fotoğraf · ${state.pending} bekliyor`
+      ? `Yüz taraması: ${state.processed}/${state.total_images} fotoğraf · ${state.pending} tarama sırasında sırada`
       : `Yüz taraması hazır · ${state.people_count} kişi bulundu`;
     chips.innerHTML = [
       `<button class="city-chip ${selectedPerson ? '' : 'active'}" onclick="clearPersonFilter()">Tümü</button>`,

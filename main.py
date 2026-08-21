@@ -710,6 +710,29 @@ def gallery_list(page: int = 1, limit: int = 30, type: str = 'all',
     items = list(data['items'])
     if type in ('image', 'video'):
         items = [it for it in items if it['type'] == type]
+    elif type == 'unmatched':
+        with faces_lock:
+            db = load_faces_db()
+        assigned_ids = {
+            f.get('photo_id') for f in db['faces'].values()
+            if f.get('person_id')
+        }
+        assigned_ids.update(
+            gid for gid, person_ids in db.get('photo_people', {}).items()
+            if person_ids
+        )
+        processed_ids = {
+            gid for gid, rec in db['processed'].items()
+            if gid in data['index']
+            and rec.get('mtime') == data['index'][gid]['mtime']
+            and rec.get('size') == data['index'][gid]['size']
+        }
+        items = [
+            it for it in items
+            if it['type'] == 'image'
+            and it['id'] in processed_ids
+            and it['id'] not in assigned_ids
+        ]
     sort_map = {
         'date_desc': (lambda x: x['mtime'], True),
         'date_asc':  (lambda x: x['mtime'], False),
