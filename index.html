@@ -799,6 +799,7 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
       <div id="photo-faces-list"></div>
     </div>
     <div class="gm-actions">
+      <button class="btn btn-ghost" onclick="rescanGalleryItem()">↻ Yeniden tara</button>
       <button class="btn btn-accent" onclick="downloadGalleryItem()">↓ İndir</button>
       <button class="btn btn-red" onclick="deleteGalleryItem()">🗑 Sil</button>
     </div>
@@ -1727,10 +1728,12 @@ async function loadPhotoFaces(){
           <option value="">${escapeHtml(face.person_name)}</option>
           ${options}
           <option value="__new__">+ Yeni kişi oluştur</option>
+          <option value="__ignore__">Yüz değil / görmezden gel</option>
         </select>
       </div>`).join('');
     list.querySelectorAll('select').forEach((select, index) => {
-      select.value = faceData.faces[index].person_id || '';
+      select.value = faceData.faces[index].ignored
+        ? '__ignore__' : (faceData.faces[index].person_id || '');
     });
     panel.style.display = 'block';
   } catch(e){
@@ -1740,6 +1743,22 @@ async function loadPhotoFaces(){
 
 async function reassignFace(faceId, personId){
   if(!personId) return;
+  if(personId === '__ignore__'){
+    try{
+      await api('/api/faces/ignore', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({face_ids:[faceId]})
+      });
+      await loadFacesPanel();
+      await loadPhotoFaces();
+      if(selectedPerson) selectPerson(selectedPerson.id);
+      toast('✓ Yüz kişi eşleştirmesinden çıkarıldı');
+    } catch(e){
+      toast('❌ '+e.message);
+      loadPhotoFaces();
+    }
+    return;
+  }
   let body = {face_ids:[faceId], person_id:personId};
   if(personId === '__new__'){
     const name = prompt('Yeni kişi adı:');
@@ -1766,6 +1785,20 @@ function navGallery(dir){
   galleryIndex = ni;
   renderGalleryModal();
   loadPhotoFaces();
+}
+async function rescanGalleryItem(){
+  const it = galleryItems[galleryIndex];
+  if(!it || it.type !== 'image') return;
+  try{
+    toast('↻ Fotoğraf yeniden taranıyor…');
+    await api(`/api/faces/photo/${encodeURIComponent(it.id)}/rescan`, {method:'POST'});
+    await loadFacesPanel();
+    await loadPhotoFaces();
+    if(selectedPerson) selectPerson(selectedPerson.id);
+    toast('✓ Fotoğraf yeniden tarandı');
+  } catch(e){
+    toast('❌ '+e.message);
+  }
 }
 function downloadGalleryItem(){
   const it = galleryItems[galleryIndex];

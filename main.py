@@ -865,6 +865,17 @@ def save_faces_db(db):
 def _face_distance(a, b):
     return float(np.linalg.norm(np.array(a) - np.array(b)))
 
+def _find_previous_face(encoding, previous_faces):
+    """Re-match a face on a re-scan so manual decisions survive file changes."""
+    best_face, best_dist = None, None
+    for face in previous_faces:
+        if not face.get('ignored') and not face.get('manual'):
+            continue
+        dist = _face_distance(face['encoding'], encoding)
+        if best_dist is None or dist < best_dist:
+            best_face, best_dist = face, dist
+    return best_face if best_dist is not None and best_dist < 0.6 else None
+
 def _find_best_person(encoding, people):
     """Verilen yüz encoding'ine en yakın kişiyi bulur (eşik altındaysa)."""
     best_pid, best_dist = None, None
@@ -932,7 +943,7 @@ def _cleanup_faces_db(db, active_gids):
         changed = True
     return changed
 
-def process_new_faces(limit=FACE_BATCH_SIZE):
+def process_new_faces(limit=FACE_BATCH_SIZE, only_gid=None, force=False):
     """Galerideki henüz taranmamış fotoğrafları yüz tanımadan geçirir.
     En yeni fotoğraflar önce işlenir, böylece az önce yüklenen fotoğraflar
     bekleyen eski fotoğraf yığınının arkasında kalmadan kısa sürede gruplanır."""
@@ -943,9 +954,10 @@ def process_new_faces(limit=FACE_BATCH_SIZE):
         return 0
 
     data  = scan_gallery()
-    items = [it for it in data['items'] if it['type'] == 'image']
+    all_image_items = [it for it in data['items'] if it['type'] == 'image']
+    items = [it for it in all_image_items if only_gid is None or it['id'] == only_gid]
 
-    active_gids = {it['id'] for it in items}
+    active_gids = {it['id'] for it in all_image_items}
     with faces_lock:
         db = load_faces_db()
         changed = _cleanup_faces_db(db, active_gids)
@@ -958,7 +970,7 @@ def process_new_faces(limit=FACE_BATCH_SIZE):
             break
         gid = it['id']
         rec = db['processed'].get(gid)
-        if rec and rec.get('mtime') == it['mtime'] and rec.get('size') == it['size']:
+        if not force and rec and rec.get('mtime') == it['mtime'] and rec.get('size') == it['size']:
             continue
 
         full = os.path.join(GALLERY_DIR, it['rel'])
@@ -970,17 +982,33 @@ def process_new_faces(limit=FACE_BATCH_SIZE):
 
             with faces_lock:
                 db = load_faces_db()
+                previous_faces = [
+                    f.copy() for f in db['faces'].values()
+                    if f.get('photo_id') == gid
+                ]
                 _remove_photo_faces(db, gid)
                 for loc, enc in zip(locations, encodings):
                     enc_list = enc.tolist()
-                    pid, _ = _find_best_person(enc_list, db['people'])
-                    if pid is None:
+                    previous = _find_previous_face(enc_list, previous_faces)
+                    ignored = bool(previous and previous.get('ignored'))
+                    manual_pid = (
+                        previous.get('person_id')
+                        if previous and previous.get('manual')
+                        and previous.get('person_id') in db['people']
+                        else None
+                    )
+                    pid = manual_pid
+                    if ignored:
+                        pid = None
+                    elif pid is None:
+                        pid, _ = _find_best_person(enc_list, db['people'])
+                    if pid is None and not ignored:
                         pid = str(uuid.uuid4())[:8]
                         db['people'][pid] = {
                             'name': _next_person_name(db['people']),
                             'centroid': enc_list, 'count': 1, 'cover_face_id': None,
                         }
-                    else:
+                    elif pid is not None and not manual_pid:
                         p = db['people'][pid]
                         c, n = np.array(p['centroid']), p['count']
                         p['centroid'] = (((c * n) + np.array(enc_list)) / (n + 1)).tolist()
@@ -990,11 +1018,16 @@ def process_new_faces(limit=FACE_BATCH_SIZE):
                     db['faces'][face_id] = {
                         'photo_id': gid, 'person_id': pid,
                         'bbox': list(loc), 'scale': scale,
-                        'manual': False, 'encoding': enc_list,
+                        'manual': bool(previous and previous.get('manual')),
+                        'ignored': ignored, 'encoding': enc_list,
                     }
-                    if not db['people'][pid]['cover_face_id']:
+                    if pid and not db['people'][pid]['cover_face_id']:
                         db['people'][pid]['cover_face_id'] = face_id
                     face_ids.append(face_id)
+                for pid in {f.get('person_id') for f in db['faces'].values()
+                            if f.get('photo_id') == gid and f.get('manual') and f.get('person_id')}:
+                    if pid in db['people']:
+                        _recompute_person_centroid(db, pid)
                 db['processed'][gid] = {
                     'mtime': it['mtime'], 'size': it['size'], 'faces': face_ids,
                 }
@@ -1136,9 +1169,21 @@ def faces_in_photo(gid: str):
             result.append({
                 'face_id': fid,
                 'person_id': f.get('person_id'),
-                'person_name': person.get('name', 'Etiketsiz'),
+                'ignored': bool(f.get('ignored')),
+                'person_name': 'Yüz değil / görmezden gelindi' if f.get('ignored')
+                    else person.get('name', 'Etiketsiz'),
             })
     return {'faces': result}
+
+
+@app.post('/api/faces/photo/{gid}/rescan')
+def faces_rescan_photo(gid: str):
+    """Immediately re-runs face detection for one gallery image."""
+    item = scan_gallery()['index'].get(gid)
+    if not item or item.get('type') != 'image':
+        raise HTTPException(404, 'Fotoğraf bulunamadı')
+    processed = process_new_faces(limit=1, only_gid=gid, force=True)
+    return {'ok': True, 'processed': processed}
 
 
 @app.get('/api/faces/thumb/{face_id}')
@@ -1208,6 +1253,7 @@ def faces_reassign(req: FaceReassignReq):
             if old_pid: affected_pids.add(old_pid)
             f['person_id'] = target_pid
             f['manual'] = True
+            f['ignored'] = False
 
         for pid in list(affected_pids):
             if pid in db['people']:
@@ -1215,6 +1261,31 @@ def faces_reassign(req: FaceReassignReq):
 
         save_faces_db(db)
     return {'ok': True, 'person_id': target_pid}
+
+
+@app.post('/api/faces/ignore')
+def faces_ignore(req: FaceReassignReq):
+    """Marks selected detections as non-person faces and removes their grouping."""
+    if not req.face_ids:
+        raise HTTPException(400, 'Yüz seçilmedi')
+    with faces_lock:
+        db = load_faces_db()
+        face_ids = list(dict.fromkeys(fid for fid in req.face_ids if fid in db['faces']))
+        if not face_ids:
+            raise HTTPException(404, 'Geçerli yüz bulunamadı')
+        affected_pids = set()
+        for fid in face_ids:
+            face = db['faces'][fid]
+            if face.get('person_id'):
+                affected_pids.add(face['person_id'])
+            face['person_id'] = None
+            face['manual'] = True
+            face['ignored'] = True
+        for pid in affected_pids:
+            if pid in db['people']:
+                _recompute_person_centroid(db, pid)
+        save_faces_db(db)
+    return {'ok': True}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
