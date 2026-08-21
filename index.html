@@ -797,6 +797,16 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
     <div class="photo-faces" id="photo-faces-panel" style="display:none">
       <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase">Fotoğraftaki yüzler</div>
       <div id="photo-faces-list"></div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase">Fotoğraf kişiye ait</div>
+        <div id="photo-person-links" style="font-size:11px;color:var(--muted);margin:7px 0"></div>
+        <div style="display:flex;gap:8px">
+          <select id="photo-person-select" style="flex:1;background:var(--surface2);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:7px">
+            <option value="">Kişi seçin</option>
+          </select>
+          <button class="btn btn-ghost" onclick="linkPhotoToPerson()">Bağla</button>
+        </div>
+      </div>
     </div>
     <div class="gm-actions">
       <button class="btn btn-ghost" onclick="rescanGalleryItem()">↻ Yeniden tara</button>
@@ -1715,10 +1725,6 @@ async function loadPhotoFaces(){
       api(`/api/faces/photo/${encodeURIComponent(item.id)}`),
       api('/api/faces/people')
     ]);
-    if(!faceData.faces.length){
-      panel.style.display = 'none';
-      return;
-    }
     const options = peopleData.people.map(person =>
       `<option value="${person.id}">${escapeHtml(person.name)}</option>`).join('');
     list.innerHTML = faceData.faces.map(face => `
@@ -1735,10 +1741,46 @@ async function loadPhotoFaces(){
       select.value = faceData.faces[index].ignored
         ? '__ignore__' : (faceData.faces[index].person_id || '');
     });
+    document.getElementById('photo-person-select').innerHTML =
+      '<option value="">Kişi seçin</option>' + options;
+    document.getElementById('photo-person-links').innerHTML = faceData.links.length
+      ? faceData.links.map(link =>
+          `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:7px;margin-bottom:4px;padding:4px 7px;border:1px solid var(--border2);border-radius:4px">` +
+          `${escapeHtml(link.person_name)} <button class="del-btn" onclick="unlinkPhotoFromPerson('${link.person_id}')" title="Bağlantıyı kaldır">✕</button></span>`
+        ).join('')
+      : 'Henüz kişi bağlantısı yok';
     panel.style.display = 'block';
   } catch(e){
     panel.style.display = 'none';
   }
+}
+
+async function linkPhotoToPerson(){
+  const item = galleryItems[galleryIndex];
+  const personId = document.getElementById('photo-person-select').value;
+  if(!item || !personId) return;
+  try{
+    await api(`/api/faces/photo/${encodeURIComponent(item.id)}/link`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({person_id:personId})
+    });
+    await loadFacesPanel();
+    await loadPhotoFaces();
+    if(selectedPerson) selectPerson(selectedPerson.id);
+    toast('✓ Fotoğraf kişiye bağlandı');
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+async function unlinkPhotoFromPerson(personId){
+  const item = galleryItems[galleryIndex];
+  if(!item) return;
+  try{
+    await api(`/api/faces/photo/${encodeURIComponent(item.id)}/link/${encodeURIComponent(personId)}`, {method:'DELETE'});
+    await loadFacesPanel();
+    await loadPhotoFaces();
+    if(selectedPerson) selectPerson(selectedPerson.id);
+    toast('✓ Fotoğraf kişi bağlantısından çıkarıldı');
+  } catch(e){ toast('❌ '+e.message); }
 }
 
 async function reassignFace(faceId, personId){

@@ -857,7 +857,9 @@ FACE_SCAN_INTERVAL   = 30     # saniye — yeni fotoğraf bu aralıkla kontrol e
 faces_lock = threading.Lock()
 
 def load_faces_db():
-    return load_json(FACES_FILE, {'processed': {}, 'faces': {}, 'people': {}})
+    db = load_json(FACES_FILE, {'processed': {}, 'faces': {}, 'people': {}})
+    db.setdefault('photo_people', {})
+    return db
 
 def save_faces_db(db):
     save_json(FACES_FILE, db)
@@ -941,6 +943,10 @@ def _cleanup_faces_db(db, active_gids):
     for gid in {f.get('photo_id') for f in db['faces'].values()} - active_gids:
         _remove_photo_faces(db, gid)
         changed = True
+    for gid in list(db.get('photo_people', {})):
+        if gid not in active_gids:
+            db['photo_people'].pop(gid, None)
+            changed = True
     return changed
 
 def process_new_faces(limit=FACE_BATCH_SIZE, only_gid=None, force=False):
@@ -1120,6 +1126,10 @@ def faces_delete_person(pid: str):
         for f in db['faces'].values():
             if f.get('person_id') == pid:
                 f['person_id'] = None
+        for gid, person_ids in list(db.get('photo_people', {}).items()):
+            db['photo_people'][gid] = [item for item in person_ids if item != pid]
+            if not db['photo_people'][gid]:
+                db['photo_people'].pop(gid, None)
         db['people'].pop(pid, None)
         save_faces_db(db)
     return {'ok': True}
@@ -1136,6 +1146,9 @@ def faces_person_photos(pid: str, page: int = 1, limit: int = 30):
     for f in db['faces'].values():
         if f.get('person_id') == pid and f['photo_id'] not in seen:
             seen.add(f['photo_id']); photo_ids.append(f['photo_id'])
+    for gid, person_ids in db.get('photo_people', {}).items():
+        if pid in person_ids and gid not in seen:
+            seen.add(gid); photo_ids.append(gid)
 
     gdata = scan_gallery()
     items = [gdata['index'][gid] for gid in photo_ids if gid in gdata['index']]
@@ -1173,7 +1186,45 @@ def faces_in_photo(gid: str):
                 'person_name': 'Yüz değil / görmezden gelindi' if f.get('ignored')
                     else person.get('name', 'Etiketsiz'),
             })
-    return {'faces': result}
+    links = [
+        {'person_id': pid, 'person_name': db['people'][pid]['name']}
+        for pid in db.get('photo_people', {}).get(gid, [])
+        if pid in db['people']
+    ]
+    return {'faces': result, 'links': links}
+
+
+class PhotoPersonLinkReq(BaseModel):
+    person_id: str
+
+@app.post('/api/faces/photo/{gid}/link')
+def faces_link_photo(gid: str, req: PhotoPersonLinkReq):
+    """Links a photo to a person without adding any face encoding."""
+    item = scan_gallery()['index'].get(gid)
+    if not item:
+        raise HTTPException(404, 'Fotoğraf bulunamadı')
+    with faces_lock:
+        db = load_faces_db()
+        if req.person_id not in db['people']:
+            raise HTTPException(404, 'Kişi bulunamadı')
+        links = db.setdefault('photo_people', {}).setdefault(gid, [])
+        if req.person_id not in links:
+            links.append(req.person_id)
+        save_faces_db(db)
+    return {'ok': True}
+
+
+@app.delete('/api/faces/photo/{gid}/link/{pid}')
+def faces_unlink_photo(gid: str, pid: str):
+    with faces_lock:
+        db = load_faces_db()
+        links = db.setdefault('photo_people', {}).get(gid, [])
+        if pid in links:
+            links.remove(pid)
+        if not links:
+            db['photo_people'].pop(gid, None)
+        save_faces_db(db)
+    return {'ok': True}
 
 
 @app.post('/api/faces/photo/{gid}/rescan')
