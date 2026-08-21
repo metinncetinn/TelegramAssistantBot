@@ -1092,7 +1092,7 @@ def faces_people():
             'id': pid, 'name': p['name'],
             'count': p['count'], 'cover_face_id': p.get('cover_face_id'),
         })
-    people.sort(key=lambda x: x['count'], reverse=True)
+    people.sort(key=lambda x: x['name'].casefold())
     return {'people': people}
 
 
