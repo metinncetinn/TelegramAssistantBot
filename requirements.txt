@@ -9,6 +9,7 @@ pydantic>=2.10.0,<3.0
 tefas-crawler
 numpy
 Pillow
+pillow-heif
 face_recognition
 python-multipart
 setuptools<81
