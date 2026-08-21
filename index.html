@@ -625,9 +625,10 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
         <div class="page-title" style="margin-bottom:0">Galeri</div>
         <div style="display:flex;gap:8px">
           <button class="refresh-btn" onclick="openUpload()">↑ Yükle</button>
-          <button class="refresh-btn" onclick="refreshGallery()">↻ Güncelle</button>
+          <button class="refresh-btn" id="gallery-refresh-button" onclick="refreshGallery()">↻ Güncelle</button>
         </div>
       </div>
+      <div id="gallery-refresh-status" style="font-size:10px;color:var(--muted);margin:-8px 0 10px"></div>
 
       <!-- Gizli file input -->
       <input type="file" id="gallery-file-input" multiple accept="image/*,video/*"
@@ -1478,8 +1479,10 @@ async function loadGalleryStorage(){
       </div>
       <div class="storage-bar"><div class="storage-bar-fill" style="width:${d.used_pct}%"></div></div>
       <div style="font-size:11px;color:var(--muted)">${fmt(d.used_gb)} GB / ${fmt(d.total_gb)} GB &nbsp;(%${fmt(d.used_pct)})</div>`;
+    return true;
   } catch(e){
     box.innerHTML = `<div class="empty-msg">❌ ${e.message}</div>`;
+    return false;
   }
 }
 
@@ -1513,11 +1516,13 @@ async function loadFacesPanel(){
         <span class="person-count">${person.count} yüz</span>
       </button>`).join('');
     cards.style.display = data.people.length ? 'grid' : 'none';
+    return true;
   } catch(e){
     status.style.display = 'block';
     status.textContent = 'Yüz tanıma hazır değil';
     chips.style.display = 'none';
     cards.style.display = 'none';
+    return false;
   }
 }
 
@@ -1638,21 +1643,34 @@ async function handleFileUpload(input){
 }
 
 async function refreshGallery(){
-  const refreshButton = document.querySelector('#page-gallery .refresh-btn[onclick="refreshGallery()"]');
+  const refreshButton = document.getElementById('gallery-refresh-button');
+  const status = document.getElementById('gallery-refresh-status');
   if(refreshButton) refreshButton.disabled = true;
+  if(status) status.textContent = 'Güncelleniyor…';
   try{
-    await Promise.all([loadGalleryStorage(), loadFacesPanel()]);
+    const panelResults = await Promise.all([loadGalleryStorage(), loadFacesPanel()]);
+    let galleryOk = true;
+    if(selectedPerson){
+      await selectPerson(selectedPerson.id);
+    } else {
+      galleryPage = 1; galleryItems = [];
+      galleryOk = await loadGalleryPage(true);
+    }
+    const ok = panelResults.every(Boolean) && galleryOk;
+    if(status){
+      status.style.color = ok ? 'var(--green)' : 'var(--red)';
+      status.textContent = ok
+        ? `✓ Güncellendi · ${new Date().toLocaleTimeString('tr-TR')}`
+        : '✕ Bazı bilgiler yenilenemedi; listeyi ve hata mesajını kontrol edin';
+    }
   } catch(e){
-    toast('❌ '+e.message);
-  }
-  if(selectedPerson){
-    await selectPerson(selectedPerson.id);
+    if(status){
+      status.style.color = 'var(--red)';
+      status.textContent = `✕ Güncelleme hatası: ${e.message}`;
+    }
+  } finally {
     if(refreshButton) refreshButton.disabled = false;
-    return;
   }
-  galleryPage = 1; galleryItems = [];
-  await loadGalleryPage(true);
-  if(refreshButton) refreshButton.disabled = false;
 }
 
 async function loadGalleryPage(reset=false){
@@ -1668,9 +1686,11 @@ async function loadGalleryPage(reset=false){
     galleryHasMore = galleryPage < d.pages;
     renderGalleryGrid();
     document.getElementById('gallery-more').style.display = galleryHasMore ? 'block' : 'none';
+    return true;
   } catch(e){
     grid.innerHTML = `<div class="empty-msg" style="grid-column:1/-1">❌ ${e.message}</div>`;
     document.getElementById('gallery-more').style.display = 'none';
+    return false;
   }
 }
 
