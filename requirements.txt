@@ -7,3 +7,4 @@ apscheduler==3.10.4
 pytz==2023.3.post1
 pydantic==2.5.0
 tefas-crawler
+setuptools<81

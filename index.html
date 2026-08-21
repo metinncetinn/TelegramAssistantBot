@@ -1421,6 +1421,7 @@ let gallerySort   = 'date_desc';
 let galleryItems  = [];
 let galleryHasMore = false;
 let galleryIndex  = -1;
+let selectedPerson = null;
 
 function fmtBytes(n){
   if(n >= 1024**3) return (n/1024**3).toFixed(2)+' GB';
@@ -1443,6 +1444,77 @@ async function loadGalleryStorage(){
   } catch(e){
     box.innerHTML = `<div class="empty-msg">❌ ${e.message}</div>`;
   }
+}
+
+async function loadFacesPanel(){
+  const status = document.getElementById('faces-status');
+  const chips = document.getElementById('people-chips');
+  try{
+    const [state, data] = await Promise.all([
+      api('/api/faces/status'),
+      api('/api/faces/people')
+    ]);
+    status.style.display = 'block';
+    status.textContent = state.pending > 0
+      ? `Yüz taraması: ${state.processed}/${state.total_images} fotoğraf · ${state.pending} bekliyor`
+      : `Yüz taraması hazır · ${state.people_count} kişi bulundu`;
+    chips.innerHTML = [
+      `<button class="city-chip ${selectedPerson ? '' : 'active'}" onclick="clearPersonFilter()">Tümü</button>`,
+      ...data.people.map(person =>
+        `<button class="city-chip ${selectedPerson?.id === person.id ? 'active' : ''}" onclick="selectPerson('${person.id}')">` +
+        `${person.name} <span style="color:var(--dim)">(${person.count})</span></button>`
+      )
+    ].join('');
+    chips.style.display = data.people.length ? 'flex' : 'none';
+  } catch(e){
+    status.style.display = 'block';
+    status.textContent = 'Yüz tanıma hazır değil';
+    chips.style.display = 'none';
+  }
+}
+
+async function selectPerson(pid){
+  try{
+    const people = await api('/api/faces/people');
+    const person = people.people.find(item => item.id === pid);
+    if(!person) return;
+    selectedPerson = person;
+    document.getElementById('person-filter-name').textContent = person.name;
+    document.getElementById('person-filter-bar').style.display = 'flex';
+    document.querySelectorAll('#page-gallery .tx-tab').forEach(b=>b.classList.remove('active'));
+    document.querySelector('#page-gallery .tx-tab[data-filter="all"]').classList.add('active');
+    const data = await api(`/api/faces/people/${encodeURIComponent(pid)}/photos?page=1&limit=100`);
+    galleryItems = data.items;
+    galleryHasMore = false;
+    renderGalleryGrid();
+    document.getElementById('gallery-more').style.display = 'none';
+    loadFacesPanel();
+  } catch(e){ toast('❌ '+e.message); }
+}
+
+function clearPersonFilter(){
+  selectedPerson = null;
+  document.getElementById('person-filter-bar').style.display = 'none';
+  galleryPage = 1;
+  galleryItems = [];
+  loadFacesPanel();
+  loadGalleryPage(true);
+}
+
+async function renamePersonPrompt(){
+  if(!selectedPerson) return;
+  const name = prompt('Yeni kişi adı:', selectedPerson.name);
+  if(name === null || !name.trim()) return;
+  try{
+    await api(`/api/faces/people/${encodeURIComponent(selectedPerson.id)}/rename`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: name.trim()})
+    });
+    selectedPerson.name = name.trim();
+    document.getElementById('person-filter-name').textContent = selectedPerson.name;
+    loadFacesPanel();
+    toast('✓ Kişi adı güncellendi');
+  } catch(e){ toast('❌ '+e.message); }
 }
 
 function setGallerySort(s){
@@ -1519,11 +1591,17 @@ async function handleFileUpload(input){
 
 function refreshGallery(){
   loadGalleryStorage();
+  loadFacesPanel();
+  if(selectedPerson){
+    selectPerson(selectedPerson.id);
+    return;
+  }
   galleryPage = 1; galleryItems = [];
   loadGalleryPage(true);
 }
 
 async function loadGalleryPage(reset=false){
+  if(selectedPerson) return;
   const grid = document.getElementById('gallery-grid');
   if(reset){
     grid.innerHTML = '<div class="loading-row" style="grid-column:1/-1"><span class="spin"></span> Yükleniyor…</div>';
