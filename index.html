@@ -1636,15 +1636,22 @@ async function handleFileUpload(input){
   input.value = '';
 }
 
-function refreshGallery(){
-  loadGalleryStorage();
-  loadFacesPanel();
+async function refreshGallery(){
+  const refreshButton = document.querySelector('#page-gallery .refresh-btn[onclick="refreshGallery()"]');
+  if(refreshButton) refreshButton.disabled = true;
+  try{
+    await Promise.all([loadGalleryStorage(), loadFacesPanel()]);
+  } catch(e){
+    toast('❌ '+e.message);
+  }
   if(selectedPerson){
-    selectPerson(selectedPerson.id);
+    await selectPerson(selectedPerson.id);
+    if(refreshButton) refreshButton.disabled = false;
     return;
   }
   galleryPage = 1; galleryItems = [];
-  loadGalleryPage(true);
+  await loadGalleryPage(true);
+  if(refreshButton) refreshButton.disabled = false;
 }
 
 async function loadGalleryPage(reset=false){
