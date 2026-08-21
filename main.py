@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 import json, os, datetime, uuid, requests, pytz, time, threading, hashlib, shutil, subprocess, mimetypes
+import numpy as np
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -840,6 +841,335 @@ def gallery_storage():
         'used_pct': round(used / total * 100, 1) if total else 0,
         'file_count': len(data['items']),
     }
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — YÜZ TANIMA / KİŞİ GRUPLAMA
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FACES_FILE           = os.path.join(BASE_DIR, 'faces.json')
+FACE_THUMB_DIR       = os.path.join(BASE_DIR, 'face_thumbs')
+FACE_MATCH_THRESHOLD = 0.55   # düşük = daha katı eşleştirme (daha az yanlış birleştirme)
+FACE_SCAN_MAX_DIM    = 1200   # yüz taraması için resmi bu boyuta küçült (Pi'de hız için)
+FACE_BATCH_SIZE      = 15     # her tarama döngüsünde işlenecek maksimum yeni fotoğraf
+FACE_SCAN_INTERVAL   = 30     # saniye — yeni fotoğraf bu aralıkla kontrol edilir
+
+faces_lock = threading.Lock()
+
+def load_faces_db():
+    return load_json(FACES_FILE, {'processed': {}, 'faces': {}, 'people': {}})
+
+def save_faces_db(db):
+    save_json(FACES_FILE, db)
+
+def _face_distance(a, b):
+    return float(np.linalg.norm(np.array(a) - np.array(b)))
+
+def _find_best_person(encoding, people):
+    """Verilen yüz encoding'ine en yakın kişiyi bulur (eşik altındaysa)."""
+    best_pid, best_dist = None, None
+    for pid, p in people.items():
+        if not p.get('centroid'): continue
+        dist = _face_distance(p['centroid'], encoding)
+        if best_dist is None or dist < best_dist:
+            best_dist, best_pid = dist, pid
+    if best_pid is not None and best_dist < FACE_MATCH_THRESHOLD:
+        return best_pid, best_dist
+    return None, None
+
+def _next_person_name(people):
+    n = 1
+    existing = {p['name'] for p in people.values()}
+    while f'Kişi {n}' in existing:
+        n += 1
+    return f'Kişi {n}'
+
+def _load_image_for_faces(full_path):
+    """HEIC dahil her formatı okuyup küçültülmüş RGB numpy array olarak döndürür.
+    scale: küçültme oranı — bbox'ları orijinal boyuta geri çevirmek için saklanır."""
+    from PIL import Image
+    img = Image.open(full_path).convert('RGB')
+    scale = 1.0
+    if max(img.size) > FACE_SCAN_MAX_DIM:
+        scale = FACE_SCAN_MAX_DIM / max(img.size)
+        img = img.resize((max(1, int(img.size[0]*scale)), max(1, int(img.size[1]*scale))))
+    return np.array(img), scale
+
+def _recompute_person_centroid(db, pid):
+    """Bir kişinin merkez vektörünü, ona atanmış tüm yüzlerin ortalaması olarak yeniden hesaplar.
+    Hiç yüzü kalmadıysa kişiyi tamamen siler."""
+    encs = [np.array(f['encoding']) for f in db['faces'].values() if f.get('person_id') == pid]
+    if not encs:
+        db['people'].pop(pid, None)
+        return
+    db['people'][pid]['centroid'] = np.mean(encs, axis=0).tolist()
+    db['people'][pid]['count']    = len(encs)
+    valid_ids = [fid for fid, f in db['faces'].items() if f.get('person_id') == pid]
+    if db['people'][pid].get('cover_face_id') not in valid_ids:
+        db['people'][pid]['cover_face_id'] = valid_ids[0] if valid_ids else None
+
+def process_new_faces(limit=FACE_BATCH_SIZE):
+    """Galerideki henüz taranmamış fotoğrafları yüz tanımadan geçirir.
+    En yeni fotoğraflar önce işlenir, böylece az önce yüklenen fotoğraflar
+    bekleyen eski fotoğraf yığınının arkasında kalmadan kısa sürede gruplanır."""
+    try:
+        import face_recognition
+    except ImportError:
+        return 0  # kütüphane kurulu değilse sessizce çık, servis çalışmaya devam etsin
+
+    data  = scan_gallery()
+    items = [it for it in data['items'] if it['type'] == 'image']
+
+    with faces_lock:
+        db = load_faces_db()
+
+    processed_count = 0
+    for it in items:
+        if processed_count >= limit:
+            break
+        gid = it['id']
+        rec = db['processed'].get(gid)
+        if rec and rec.get('mtime') == it['mtime']:
+            continue
+
+        full = os.path.join(GALLERY_DIR, it['rel'])
+        face_ids = []
+        try:
+            arr, scale = _load_image_for_faces(full)
+            locations = face_recognition.face_locations(arr, model='hog')
+            encodings = face_recognition.face_encodings(arr, known_face_locations=locations)
+
+            with faces_lock:
+                for loc, enc in zip(locations, encodings):
+                    enc_list = enc.tolist()
+                    pid, _ = _find_best_person(enc_list, db['people'])
+                    if pid is None:
+                        pid = str(uuid.uuid4())[:8]
+                        db['people'][pid] = {
+                            'name': _next_person_name(db['people']),
+                            'centroid': enc_list, 'count': 1, 'cover_face_id': None,
+                        }
+                    else:
+                        p = db['people'][pid]
+                        c, n = np.array(p['centroid']), p['count']
+                        p['centroid'] = (((c * n) + np.array(enc_list)) / (n + 1)).tolist()
+                        p['count']    = n + 1
+
+                    face_id = str(uuid.uuid4())[:12]
+                    db['faces'][face_id] = {
+                        'photo_id': gid, 'person_id': pid,
+                        'bbox': list(loc), 'scale': scale,
+                        'manual': False, 'encoding': enc_list,
+                    }
+                    if not db['people'][pid]['cover_face_id']:
+                        db['people'][pid]['cover_face_id'] = face_id
+                    face_ids.append(face_id)
+        except Exception as e:
+            print(f"Yüz tanıma hatası ({it['name']}): {e}")
+
+        with faces_lock:
+            db['processed'][gid] = {'mtime': it['mtime'], 'faces': face_ids}
+        processed_count += 1
+
+    if processed_count > 0:
+        with faces_lock:
+            save_faces_db(db)
+        print(f"✓ Yüz taraması: {processed_count} fotoğraf işlendi")
+
+    return processed_count
+
+
+def _face_scan_thread():
+    while True:
+        try:
+            process_new_faces()
+        except Exception as e:
+            print(f"Yüz tarama thread hatası: {e}")
+        time.sleep(FACE_SCAN_INTERVAL)
+
+threading.Thread(target=_face_scan_thread, daemon=True).start()
+
+
+@app.get('/api/faces/status')
+def faces_status():
+    data = scan_gallery()
+    total_images = len([it for it in data['items'] if it['type'] == 'image'])
+    with faces_lock:
+        db = load_faces_db()
+    processed = len(db['processed'])
+    return {
+        'total_images': total_images,
+        'processed': processed,
+        'pending': max(0, total_images - processed),
+        'people_count': len([p for p in db['people'].values() if p.get('count', 0) > 0]),
+    }
+
+
+@app.get('/api/faces/people')
+def faces_people():
+    with faces_lock:
+        db = load_faces_db()
+    people = []
+    for pid, p in db['people'].items():
+        if p.get('count', 0) <= 0: continue
+        people.append({
+            'id': pid, 'name': p['name'],
+            'count': p['count'], 'cover_face_id': p.get('cover_face_id'),
+        })
+    people.sort(key=lambda x: x['count'], reverse=True)
+    return {'people': people}
+
+
+class RenamePersonReq(BaseModel):
+    name: str
+
+@app.post('/api/faces/people/{pid}/rename')
+def faces_rename_person(pid: str, req: RenamePersonReq):
+    name = req.name.strip()
+    if not name: raise HTTPException(400, 'İsim boş olamaz')
+    with faces_lock:
+        db = load_faces_db()
+        if pid not in db['people']: raise HTTPException(404, 'Kişi bulunamadı')
+        db['people'][pid]['name'] = name
+        save_faces_db(db)
+    return {'ok': True}
+
+
+@app.delete('/api/faces/people/{pid}')
+def faces_delete_person(pid: str):
+    """Kişiyi siler, yüzleri 'etiketsiz' bırakır (encoding korunur, tekrar gruplanabilir)."""
+    with faces_lock:
+        db = load_faces_db()
+        if pid not in db['people']: raise HTTPException(404, 'Kişi bulunamadı')
+        for f in db['faces'].values():
+            if f.get('person_id') == pid:
+                f['person_id'] = None
+        db['people'].pop(pid, None)
+        save_faces_db(db)
+    return {'ok': True}
+
+
+@app.get('/api/faces/people/{pid}/photos')
+def faces_person_photos(pid: str, page: int = 1, limit: int = 30):
+    with faces_lock:
+        db = load_faces_db()
+    if pid not in db['people']:
+        raise HTTPException(404, 'Kişi bulunamadı')
+
+    photo_ids, seen = [], set()
+    for f in db['faces'].values():
+        if f.get('person_id') == pid and f['photo_id'] not in seen:
+            seen.add(f['photo_id']); photo_ids.append(f['photo_id'])
+
+    gdata = scan_gallery()
+    items = [gdata['index'][gid] for gid in photo_ids if gid in gdata['index']]
+    items.sort(key=lambda x: x['mtime'], reverse=True)
+
+    if page < 1: page = 1
+    if limit < 1: limit = 1
+    total = len(items)
+    pages = max(1, (total + limit - 1) // limit)
+    start = (page - 1) * limit
+    out = []
+    for it in items[start:start + limit]:
+        dt = datetime.datetime.fromtimestamp(it['mtime'], TZ)
+        out.append({
+            'id': it['id'], 'type': it['type'], 'name': it['name'],
+            'size': it['size'], 'date': dt.strftime('%d.%m.%Y %H:%M'),
+        })
+    return {'items': out, 'total': total, 'page': page, 'pages': pages}
+
+
+@app.get('/api/faces/photo/{gid}')
+def faces_in_photo(gid: str):
+    """Belirli bir fotoğraftaki tüm yüzleri ve atandıkları kişiyi döndürür
+    (galeri lightbox'ında düzeltme arayüzü için)."""
+    with faces_lock:
+        db = load_faces_db()
+    result = []
+    for fid, f in db['faces'].items():
+        if f['photo_id'] == gid:
+            person = db['people'].get(f.get('person_id'), {}) if f.get('person_id') else {}
+            result.append({
+                'face_id': fid,
+                'person_id': f.get('person_id'),
+                'person_name': person.get('name', 'Etiketsiz'),
+            })
+    return {'faces': result}
+
+
+@app.get('/api/faces/thumb/{face_id}')
+def faces_thumb(face_id: str):
+    with faces_lock:
+        db = load_faces_db()
+    f = db['faces'].get(face_id)
+    if not f: raise HTTPException(404, 'Yüz bulunamadı')
+
+    item = scan_gallery()['index'].get(f['photo_id'])
+    if not item: raise HTTPException(404, 'Fotoğraf bulunamadı')
+    full = os.path.join(GALLERY_DIR, item['rel'])
+
+    os.makedirs(FACE_THUMB_DIR, exist_ok=True)
+    thumb_path = os.path.join(FACE_THUMB_DIR, face_id + '.jpg')
+    if not os.path.exists(thumb_path):
+        try:
+            from PIL import Image
+            img = Image.open(full).convert('RGB')
+            scale = f.get('scale', 1.0)
+            if scale != 1.0:
+                img = img.resize((max(1, int(img.size[0]*scale)), max(1, int(img.size[1]*scale))))
+            top, right, bottom, left = f['bbox']
+            w, h = right - left, bottom - top
+            pad_x, pad_y = int(w * 0.3), int(h * 0.3)
+            box = (
+                max(0, left - pad_x), max(0, top - pad_y),
+                min(img.size[0], right + pad_x), min(img.size[1], bottom + pad_y),
+            )
+            crop = img.crop(box)
+            crop.thumbnail((300, 300))
+            crop.save(thumb_path, 'JPEG', quality=85)
+        except Exception as e:
+            raise HTTPException(500, f'Yüz önizleme oluşturulamadı: {e}')
+    return FileResponse(thumb_path, media_type='image/jpeg')
+
+
+class FaceReassignReq(BaseModel):
+    face_ids: list[str]
+    person_id: str = ''
+    new_name: str = ''
+
+@app.post('/api/faces/reassign')
+def faces_reassign(req: FaceReassignReq):
+    """Seçilen yüzleri mevcut bir kişiye ya da yeni oluşturulan bir kişiye taşır.
+    Kaynak ve hedef kişilerin merkez vektörü yeniden hesaplanır."""
+    if not req.face_ids:
+        raise HTTPException(400, 'Yüz seçilmedi')
+    with faces_lock:
+        db = load_faces_db()
+
+        target_pid = req.person_id.strip()
+        if not target_pid:
+            name = req.new_name.strip() or _next_person_name(db['people'])
+            target_pid = str(uuid.uuid4())[:8]
+            db['people'][target_pid] = {'name': name, 'centroid': None, 'count': 0, 'cover_face_id': None}
+        elif target_pid not in db['people']:
+            raise HTTPException(404, 'Hedef kişi bulunamadı')
+
+        affected_pids = {target_pid}
+        for fid in req.face_ids:
+            f = db['faces'].get(fid)
+            if not f: continue
+            old_pid = f.get('person_id')
+            if old_pid: affected_pids.add(old_pid)
+            f['person_id'] = target_pid
+            f['manual'] = True
+
+        for pid in list(affected_pids):
+            if pid in db['people']:
+                _recompute_person_centroid(db, pid)
+
+        save_faces_db(db)
+    return {'ok': True, 'person_id': target_pid}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

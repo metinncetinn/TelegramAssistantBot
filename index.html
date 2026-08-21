@@ -635,15 +635,30 @@ input:checked+.slider:before{transform:translateX(18px);background:var(--bg)}
         <div class="loading-row"><span class="spin"></span> Yükleniyor…</div>
       </div>
 
+      <!-- Yüz tanıma durumu -->
+      <div id="faces-status" style="font-size:10px;color:var(--muted);margin-bottom:8px;display:none"></div>
+
+      <!-- Kişi filtresi -->
+      <div class="city-chips" id="people-chips" style="display:none"></div>
+
+      <!-- Aktif kişi filtresi barı -->
+      <div id="person-filter-bar" style="display:none;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="font-size:12px;color:var(--text)">👤 <span id="person-filter-name"></span></div>
+        <div style="display:flex;gap:6px">
+          <button class="refresh-btn" onclick="renamePersonPrompt()">✎ Ad Değiştir</button>
+          <button class="refresh-btn" onclick="clearPersonFilter()">✕ Kapat</button>
+        </div>
+      </div>
+
       <!-- Type filter -->
-      <div class="tx-tabs">
+      <div class="tx-tabs" id="gallery-type-filters">
         <button class="tx-tab active" data-filter="all" onclick="setGalleryFilter('all',this)">Tümü</button>
         <button class="tx-tab" data-filter="image" onclick="setGalleryFilter('image',this)">Fotoğraf</button>
         <button class="tx-tab" data-filter="video" onclick="setGalleryFilter('video',this)">Video</button>
       </div>
 
       <!-- Sort -->
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <div id="gallery-sort-row" style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
         <span style="font-size:10px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap">Sırala</span>
         <select id="gallery-sort" onchange="setGallerySort(this.value)"
           style="flex:1;background:var(--surface2);border:1px solid var(--border2);border-radius:4px;
